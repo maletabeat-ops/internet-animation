@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Как работает интернет</title>
+<style>html,body{margin:0;background:#05070f;overflow:hidden}canvas{display:block;width:100vw;height:100vh;object-fit:contain}</style>
+</head><body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const DATA = /*TIMELINE*/[];
+const W = 1080, H = 1920, CX = 540;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const GAP = 1.0, VO = 0.4;
+let t0 = 0;
+const TL = DATA.map(s => { const o = { ...s, start: t0, len: s.dur + GAP }; t0 += o.len; return o; });
+const TOTAL = t0 + 0.6;
+// time warp: new voice time -> original choreography time (anchors from ElevenLabs alignment)
+function warpFn(pairs, inv) {
+  if (!pairs || !pairs.length) return x => x;
+  const pts = [[0, 0], ...pairs].map(p => inv ? [p[1], p[0]] : p).sort((a, b) => a[0] - b[0]);
+  return x => {
+    if (x <= pts[0][0]) return x - pts[0][0] + pts[0][1];
+    for (let i = 0; i < pts.length - 1; i++) { const [a0, b0] = pts[i], [a1, b1] = pts[i + 1]; if (x <= a1) return a1 === a0 ? b1 : b0 + (b1 - b0) * (x - a0) / (a1 - a0); }
+    const l = pts[pts.length - 1]; return l[1] + (x - l[0]);
+  };
+}
+TL.forEach(s => { const f = warpFn(s.warp), g = warpFn(s.warp, true); s.toOld = lt => VO + f(lt - VO); s.toNew = lt => VO + g(lt - VO); s.odur = s.warp ? s.warp[s.warp.length - 1][1] : s.dur; });
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const P = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, t) => a + (b - a) * t;
+const eo = t => 1 - Math.pow(1 - t, 3);
+const eio = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const eb = t => { const c1 = 1.9, c3 = c1 + 1; return t <= 0 ? 0 : 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+const inout = (t, a, b, c, d) => Math.min(eo(P(t, a, b)), 1 - eo(P(t, c, d)));
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const C = { cyan: '#22d3ee', pink: '#f472b6', violet: '#a78bfa', yellow: '#facc15', green: '#4ade80', orange: '#fb923c', ink: '#0b1026', white: '#f8fafc', dim: '#94a3b8' };
+const PAL = [C.cyan, C.pink, C.yellow, C.green, C.violet, C.orange];
+
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function txt(s, x, y, size, col = C.white, o = {}) {
+  ctx.save();
+  ctx.font = `${o.w || 800} ${size}px Inter`;
+  ctx.textAlign = o.a || 'center'; ctx.textBaseline = 'middle';
+  ctx.globalAlpha *= (o.al ?? 1);
+  if (o.glow) { ctx.shadowColor = o.glow; ctx.shadowBlur = o.gb || 30; }
+  ctx.fillStyle = col; ctx.fillText(s, x, y);
+  ctx.restore();
+}
+// text that scales in around its center
+function popTxt(s, x, y, size, col, p, o = {}) {
+  if (p <= 0) return;
+  ctx.save(); ctx.translate(x, y);
+  const sc = o.slam ? lerp(2.6, 1, eo(p)) : eb(p);
+  ctx.scale(sc, sc); if (o.rot) ctx.rotate(o.rot);
+  ctx.globalAlpha *= clamp(p * 2.5) * (o.al ?? 1);
+  txt(s, 0, 0, size, col, o);
+  ctx.restore();
+}
+function pill(s, x, y, size, bg, fg, p, o = {}) {
+  if (p <= 0) return;
+  ctx.save(); ctx.translate(x, y); const sc = eb(p); ctx.scale(sc, sc); ctx.globalAlpha *= clamp(p * 3);
+  ctx.font = `800 ${size}px Inter`; const w = ctx.measureText(s).width + size * 1.2, h = size * 1.7;
+  if (o.glow) { ctx.shadowColor = o.glow; ctx.shadowBlur = 30; }
+  ctx.fillStyle = bg; rr(-w / 2, -h / 2, w, h, h / 2); ctx.fill(); ctx.shadowBlur = 0;
+  txt(s, 0, 2, size, fg);
+  ctx.restore();
+}
+function blob(x, y, r, col) { const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, col); g.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2); }
+function ring(x, y, r, col, lw, a0 = 0, a1 = Math.PI * 2) { ctx.beginPath(); ctx.arc(x, y, r, a0, a1); ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.stroke(); }
+
+// ---------- background ----------
+const PARTS = (() => { const r = rng(7); return Array.from({ length: 80 }, () => ({ x: r() * W, y: r() * H, r: 1 + r() * 3, v: .3 + r() * 1.2, c: PAL[(r() * 6) | 0], ph: r() * 6 })); })();
+function bg(t) {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#0a0f2a'); g.addColorStop(1, '#170a2c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  blob(W * .2 + Math.sin(t * .3) * 160, H * .25 + Math.cos(t * .23) * 140, 700, 'rgba(34,211,238,0.16)');
+  blob(W * .85 + Math.cos(t * .27) * 160, H * .7 + Math.sin(t * .31) * 160, 800, 'rgba(244,114,182,0.14)');
+  blob(W * .5, H * .5 + Math.sin(t * .2) * 300, 600, 'rgba(167,139,250,0.10)');
+  ctx.strokeStyle = 'rgba(167,139,250,0.07)'; ctx.lineWidth = 2; ctx.beginPath();
+  const off = (t * 50) % 120;
+  for (let y = off - 120; y < H; y += 120) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  for (let x = 0; x <= W; x += 120) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  ctx.stroke();
+  for (const p of PARTS) {
+    const y = ((p.y - t * p.v * 40) % H + H) % H;
+    ctx.globalAlpha = .35 + .35 * Math.sin(t * 2 + p.ph);
+    ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(p.x + Math.sin(t + p.ph) * 10, y, p.r, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------- icons ----------
+function browserIcon(x, y, s, label) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.shadowColor = C.cyan; ctx.shadowBlur = 30;
+  ctx.fillStyle = '#131a3a'; rr(-110, -80, 220, 160, 22); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = C.cyan; ctx.lineWidth = 5; ctx.stroke();
+  ctx.fillStyle = '#1f2a5a'; rr(-110, -80, 220, 40, [22, 22, 0, 0]); ctx.fill();
+  [C.pink, C.yellow, C.green].forEach((c, i) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(-85 + i * 22, -60, 7, 0, 7); ctx.fill(); });
+  ctx.fillStyle = 'rgba(34,211,238,.5)'; rr(-80, -15, 160, 16, 8); ctx.fill(); rr(-80, 15, 110, 16, 8); ctx.fill(); rr(-80, 45, 135, 16, 8); ctx.fill();
+  ctx.restore();
+  if (label) txt(label, x, y + 120 * s, 40 * s, C.cyan, { glow: C.cyan, gb: 15 });
+}
+function book(x, y, s, t, flip) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ctx.shadowColor = C.pink; ctx.shadowBlur = 35;
+  ctx.fillStyle = '#3b1440'; rr(-130, -95, 260, 190, 16); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = C.pink; ctx.lineWidth = 5; ctx.stroke();
+  ctx.fillStyle = '#fff1f8'; rr(-118, -82, 114, 164, 8); ctx.fill(); rr(4, -82, 114, 164, 8); ctx.fill();
+  ctx.fillStyle = 'rgba(190,24,93,.35)';
+  for (let i = 0; i < 6; i++) { ctx.fillRect(-104, -60 + i * 24, 86 - (i % 3) * 14, 8); ctx.fillRect(18, -60 + i * 24, 80 - (i % 2) * 20, 8); }
+  if (flip) { // flipping page
+    const ph = (t * 2.2) % 1, cs = Math.cos(ph * Math.PI);
+    ctx.fillStyle = `rgba(255,228,240,${.95})`; ctx.beginPath();
+    ctx.moveTo(0, -82); ctx.lineTo(cs * 118, -82 - Math.sin(ph * Math.PI) * 14); ctx.lineTo(cs * 118, 82 - Math.sin(ph * Math.PI) * 14); ctx.lineTo(0, 82); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(190,24,93,.4)'; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.fillStyle = C.pink; ctx.fillRect(-3, -85, 6, 170);
+  ctx.restore();
+}
+function serverIcon(x, y, w, h, t, glow = 0) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.shadowColor = C.green; ctx.shadowBlur = 30 + glow * 80;
+  ctx.fillStyle = '#0f1f2a'; rr(-w / 2, -h / 2, w, h, w * .08); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = C.green; ctx.lineWidth = Math.max(3, w * .02); ctx.stroke();
+  const n = 4, uh = (h - w * .12) / n;
+  for (let i = 0; i < n; i++) {
+    const yy = -h / 2 + w * .06 + i * uh;
+    ctx.fillStyle = '#16303d'; rr(-w / 2 + w * .07, yy + uh * .12, w * .86, uh * .76, w * .04); ctx.fill();
+    for (let k = 0; k < 3; k++) {
+      const on = Math.sin(t * (6 + k * 3 + i) + i * 2 + k) > -.2;
+      ctx.fillStyle = on ? [C.green, C.cyan, C.yellow][k] : '#24414f';
+      ctx.beginPath(); ctx.arc(-w / 2 + w * .17 + k * w * .1, yy + uh * .5, w * .028, 0, 7); ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(74,222,128,.25)';
+    for (let k = 0; k < 4; k++) ctx.fillRect(w * .1 + k * w * .07, yy + uh * .3, w * .035, uh * .4);
+  }
+  if (glow > 0) { ctx.globalAlpha = glow * .35; ctx.fillStyle = C.green; rr(-w / 2, -h / 2, w, h, w * .08); ctx.fill(); }
+  ctx.restore();
+}
+function cat(x, y, r, col, t = 0, sc = 1) {
+  if (sc <= 0) return;
+  ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc); ctx.rotate(Math.sin(t * 3 + x) * .06);
+  ctx.fillStyle = col;
+  for (const sx of [-1, 1]) { ctx.beginPath(); ctx.moveTo(sx * r * .95, -r * .2); ctx.lineTo(sx * r * .75, -r * 1.2); ctx.lineTo(sx * r * .15, -r * .75); ctx.closePath(); ctx.fill(); }
+  ctx.beginPath(); ctx.ellipse(0, 0, r, r * .85, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(244,114,182,.6)';
+  for (const sx of [-1, 1]) { ctx.beginPath(); ctx.ellipse(sx * r * .55, r * .25, r * .14, r * .09, 0, 0, 7); ctx.fill(); }
+  const bl = (Math.sin(t * 2.1 + x * .01) > .96) ? .12 : 1;
+  ctx.fillStyle = '#1e1b4b';
+  for (const sx of [-1, 1]) { ctx.beginPath(); ctx.ellipse(sx * r * .36, -r * .12, r * .12, r * .17 * bl, 0, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#fff'; for (const sx of [-1, 1]) { ctx.beginPath(); ctx.arc(sx * r * .36 + r * .04, -r * .19, r * .04 * bl, 0, 7); ctx.fill(); }
+  ctx.fillStyle = C.pink; ctx.beginPath(); ctx.moveTo(-r * .09, r * .1); ctx.lineTo(r * .09, r * .1); ctx.lineTo(0, r * .2); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#1e1b4b'; ctx.lineWidth = r * .045; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, r * .2); ctx.quadraticCurveTo(-r * .1, r * .36, -r * .22, r * .28); ctx.moveTo(0, r * .2); ctx.quadraticCurveTo(r * .1, r * .36, r * .22, r * .28); ctx.stroke();
+  ctx.lineWidth = r * .025; ctx.beginPath();
+  for (const sx of [-1, 1]) for (const k of [-1, 0, 1]) { ctx.moveTo(sx * r * .35, r * .18 + k * r * .06); ctx.lineTo(sx * r * 1.05, r * .1 + k * r * .14); }
+  ctx.stroke();
+  ctx.restore();
+}
+function chip(x, y, s, shake) {
+  ctx.save(); ctx.translate(x + shake, y); ctx.scale(s, s);
+  ctx.strokeStyle = C.violet; ctx.lineWidth = 8; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = -2; i <= 2; i++) { const k = i * 34; ctx.moveTo(k, -110); ctx.lineTo(k, -140); ctx.moveTo(k, 110); ctx.lineTo(k, 140); ctx.moveTo(-110, k); ctx.lineTo(-140, k); ctx.moveTo(110, k); ctx.lineTo(140, k); }
+  ctx.stroke();
+  ctx.shadowColor = C.violet; ctx.shadowBlur = 40; ctx.fillStyle = '#1e1640'; rr(-110, -110, 220, 220, 24); ctx.fill(); ctx.shadowBlur = 0; ctx.stroke();
+  ctx.strokeStyle = 'rgba(167,139,250,.5)'; ctx.lineWidth = 4; rr(-60, -60, 120, 120, 12); ctx.stroke();
+  txt('CPU', 0, 4, 44, C.violet);
+  ctx.restore();
+}
+function gear(x, y, r, a, col) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.fillStyle = col; ctx.beginPath();
+  for (let i = 0; i < 16; i++) { const ang = i / 16 * Math.PI * 2, rad = i % 2 ? r : r * 1.25; ctx.lineTo(Math.cos(ang) * rad, Math.sin(ang) * rad); }
+  ctx.closePath(); ctx.fill(); ctx.fillStyle = '#0f1f2a'; ctx.beginPath(); ctx.arc(0, 0, r * .45, 0, 7); ctx.fill(); ctx.restore();
+}
+function packetBox(x, y, s, col, n, a = 1) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.globalAlpha *= a;
+  ctx.shadowColor = col; ctx.shadowBlur = 25; ctx.fillStyle = col; rr(-26, -26, 52, 52, 12); ctx.fill(); ctx.shadowBlur = 0;
+  txt(String(n), 0, 2, 30, C.ink, { w: 900 }); ctx.restore();
+}
+function windowFrame(x, y, w, h, url, p, cursor) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(34,211,238,.45)'; ctx.shadowBlur = 50;
+  ctx.fillStyle = '#0f1530'; rr(x, y, w, h, 34); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#2b3a78'; ctx.lineWidth = 4; ctx.stroke();
+  ctx.fillStyle = '#18214a'; rr(x, y, w, 110, [34, 34, 0, 0]); ctx.fill();
+  [C.pink, C.yellow, C.green].forEach((c, i) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x + 50 + i * 36, y + 55, 12, 0, 7); ctx.fill(); });
+  ctx.fillStyle = '#0a0f26'; rr(x + 170, y + 25, w - 200, 60, 30); ctx.fill();
+  ctx.strokeStyle = p > 0 ? C.cyan : '#2b3a78'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.font = '600 36px Inter'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.white;
+  ctx.fillText(url, x + 205, y + 57);
+  if (cursor) { const tw = ctx.measureText(url).width; ctx.fillStyle = C.cyan; ctx.fillRect(x + 210 + tw, y + 36, 4, 42); }
+  if (p > 0 && p < 1) { ctx.fillStyle = C.cyan; rr(x + 170, y + 82, (w - 200) * p, 5, 3); ctx.fill(); }
+  ctx.restore();
+}
+
+// ---------- scenes ----------
+// each scene: draw(lt, d, t)  — lt is local time in seconds; voice starts at lt = VO
+const v = x => x + VO;
+const SCENES = {
+  hook(lt, d, t) {
+    const aOut = 1 - eo(P(lt, v(3.0), v(3.4)));
+    if (aOut > 0) {
+      ctx.save(); ctx.globalAlpha = aOut;
+      const p = eb(P(lt, 0, .7));
+      for (let i = 0; i < 12; i++) {
+        const a = i / 12 * Math.PI * 2 + lt * .8, r = 330 + Math.sin(lt * 3 + i) * 20;
+        ctx.fillStyle = PAL[i % 6]; ctx.globalAlpha = aOut * p;
+        ctx.beginPath(); ctx.arc(CX + Math.cos(a) * r * p, 700 + Math.sin(a) * r * p, 10, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha = aOut;
+      ctx.save(); ctx.translate(CX, 700); ctx.rotate(Math.sin(lt * 2) * .08); const s = p * (1 + .04 * Math.sin(lt * 7)); ctx.scale(s, s);
+      txt('?', 0, 0, 520, C.violet, { w: 900, glow: C.violet, gb: 60 }); ctx.restore();
+      popTxt('ЧТО ПРОИСХОДИТ,', CX, 1150, 96, C.white, P(lt, v(0.05), v(0.35)), { slam: true, w: 900, glow: C.pink, gb: 25 });
+      popTxt('когда ты открываешь сайт?', CX, 1265, 60, C.cyan, P(lt, v(1.45), v(1.8)), { w: 700 });
+      ctx.restore();
+    }
+    const b = inout(lt, v(3.3), v(3.7), v(7.2), v(7.6));
+    if (b > 0) {
+      ctx.save(); ctx.globalAlpha = b;
+      const fill = eio(P(lt, v(3.5), v(5.0)));
+      ring(CX, 760, 300, 'rgba(34,211,238,.15)', 36);
+      ctx.shadowColor = C.cyan; ctx.shadowBlur = 40;
+      ring(CX, 760, 300, C.cyan, 36, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fill); ctx.shadowBlur = 0;
+      txt((0.1 * fill).toFixed(3).replace('.', ','), CX, 730, 150, C.white, { w: 900, glow: C.cyan });
+      txt('СЕКУНДЫ', CX, 850, 50, C.cyan, { w: 800 });
+      popTxt('ЦЕЛОЕ', CX, 1200, 110, C.yellow, P(lt, v(5.4), v(5.7)), { slam: true, w: 900, glow: C.yellow, gb: 20 });
+      popTxt('ПРИКЛЮЧЕНИЕ', CX, 1320, 110, C.yellow, P(lt, v(5.65), v(5.95)), { slam: true, w: 900, glow: C.yellow, gb: 20 });
+      ctx.restore();
+    }
+    const g = P(lt, v(7.65), v(7.95));
+    if (g > 0) {
+      const k = lt - v(7.65);
+      ctx.save(); ctx.translate(CX, 820);
+      for (let i = 0; i < 24; i++) {
+        const a = i / 24 * Math.PI * 2, r0 = 120 + k * 900, r1 = r0 + 140;
+        ctx.strokeStyle = PAL[i % 6]; ctx.lineWidth = 10; ctx.globalAlpha = clamp(1 - k * .9); ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0); ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1); ctx.stroke();
+      }
+      ctx.restore();
+      popTxt('ПОГНАЛИ!', CX, 820, 170, C.yellow, g, { slam: true, w: 900, glow: C.orange, gb: 50, rot: -.06 });
+    }
+  },
+
+  type(lt, d, t) {
+    const inP = eo(P(lt, 0, .6));
+    const y = lerp(1400, 560, inP);
+    const url = 'kotiki.ru';
+    const n = Math.floor(P(lt, v(2.0), v(3.0)) * url.length + .0001);
+    const typed = url.slice(0, n);
+    const enter = v(4.0);
+    const load = P(lt, enter, enter + .9);
+    windowFrame(90, y, 900, 640, typed, load, lt < enter && Math.floor(lt * 3) % 2 === 0);
+    // page placeholder lines
+    ctx.save(); ctx.globalAlpha = .25 * inP; ctx.fillStyle = C.violet;
+    for (let i = 0; i < 5; i++) { rr(150, y + 170 + i * 80, 780 - (i % 3) * 150, 36, 18); ctx.fill(); }
+    ctx.restore();
+    // hint arrow
+    const hint = inout(lt, v(0.2), v(0.6), v(2.0), v(2.3));
+    if (hint > 0) {
+      ctx.save(); ctx.globalAlpha = hint; const bob = Math.sin(lt * 6) * 14;
+      pill('АДРЕС САЙТА', 640, y - 120 + bob, 40, C.cyan, C.ink, 1);
+      ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.moveTo(620, y - 70 + bob); ctx.lineTo(660, y - 70 + bob); ctx.lineTo(640, y - 40 + bob); ctx.fill();
+      ctx.restore();
+    }
+    // typed letters burst
+    for (let i = 0; i < n; i++) {
+      const ti = v(2.0) + (i + 1) / url.length * 1.0, k = lt - ti;
+      if (k > 0 && k < .5) { ctx.save(); ctx.globalAlpha = 1 - k * 2; txt(url[i], 300 + i * 60, y - 40 - k * 200, 70, PAL[i % 6], { w: 900 }); ctx.restore(); }
+    }
+    // Enter key
+    const kp = P(lt, v(3.5), v(3.85));
+    if (kp > 0) {
+      const press = lt > enter ? Math.max(0, 1 - (lt - enter) * 5) : 0;
+      ctx.save(); ctx.translate(CX, 1420); const s = eb(kp) * (1 - press * .12); ctx.scale(s, s);
+      ctx.fillStyle = '#2a1a4a'; rr(-230, -100 + 22, 460, 200, 36); ctx.fill();
+      ctx.shadowColor = C.pink; ctx.shadowBlur = 40 + press * 60;
+      ctx.fillStyle = '#3d2470'; rr(-230, -100 + press * 18, 460, 190, 36); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.strokeStyle = C.pink; ctx.lineWidth = 6; ctx.stroke();
+      txt('ENTER ⏎', 0, -5 + press * 18, 80, C.white, { w: 900 });
+      ctx.restore();
+    }
+    // ripple from address bar on enter
+    const rp = lt - enter;
+    if (rp > 0 && rp < 1.2) {
+      for (let k = 0; k < 3; k++) {
+        const q = rp - k * .12; if (q <= 0) continue;
+        ctx.save(); ctx.globalAlpha = clamp(1 - q); ring(CX, y + 57, 60 + q * 900, PAL[k], 10 * (1 - q) + 2); ctx.restore();
+      }
+    }
+  },
+
+  dns(lt, d, t) {
+    // part 1: the computer doesn't understand names
+    const a1 = 1 - eo(P(lt, v(3.6), v(4.0)));
+    if (a1 > 0) {
+      ctx.save(); ctx.globalAlpha = a1;
+      const cp = eb(P(lt, 0, .6));
+      const shake = (lt > v(1.4) && lt < v(2.4)) ? Math.sin(lt * 70) * 10 : 0;
+      chip(CX, 620, cp, shake);
+      for (let i = 0; i < 3; i++) popTxt('?', CX + (i - 1) * 150, 380 - Math.sin(lt * 4 + i) * 15, 90, C.pink, P(lt, v(1.2 + i * .15), v(1.5 + i * .15)), { w: 900, glow: C.pink });
+      // name → digits scramble
+      const word = 'kotiki.ru', digits = '101101011';
+      const sp = P(lt, v(2.6), v(3.4));
+      let s = '';
+      for (let i = 0; i < word.length; i++) {
+        const th = i / word.length;
+        if (sp > th + .12) s += digits[i]; else if (sp > th) s += '01#$%&@'[(Math.floor(lt * 30) + i) % 7]; else s += word[i];
+      }
+      const col = sp > .9 ? C.green : (lt > v(1.4) ? C.pink : C.white);
+      popTxt(s, CX, 1080, 130, col, P(lt, v(0.1), v(0.4)), { w: 900, glow: col, gb: 25 });
+      if (lt > v(1.4) && sp < .1) { ctx.save(); ctx.strokeStyle = C.pink; ctx.lineWidth = 12; ctx.lineCap = 'round'; const k = eo(P(lt, v(1.4), v(1.7))); ctx.beginPath(); ctx.moveTo(220, 1080); ctx.lineTo(lerp(220, 860, k), 1080); ctx.stroke(); ctx.restore(); }
+      popTxt('НУЖНЫ ЦИФРЫ', CX, 1260, 70, C.green, P(lt, v(2.7), v(3.0)), { w: 900 });
+      ctx.restore();
+    }
+    // part 2: browser asks DNS
+    const t2 = v(3.9);
+    if (lt > t2) {
+      const bp = eb(P(lt, t2, t2 + .5)), kp = eb(P(lt, t2 + .4, t2 + .9));
+      browserIcon(250, 700, bp * 1.1, 'БРАУЗЕР');
+      book(820, 700, kp * 1.15, lt, lt > v(6.5));
+      if (lt > v(6.5)) popTxt('DNS', 820, 520, 90, C.pink, P(lt, v(6.5), v(6.8)), { w: 900, glow: C.pink });
+      // flying question bubble
+      const fp = P(lt, v(4.6), v(5.8));
+      if (fp > 0 && fp < 1) {
+        const e = eio(fp), x = lerp(330, 720, e), y = 700 - Math.sin(e * Math.PI) * 260;
+        pill('kotiki.ru = ?', x, y, 40, C.yellow, C.ink, 1);
+        for (let k = 1; k < 6; k++) { const e2 = eio(clamp(fp - k * .03)); ctx.globalAlpha = .4 - k * .07; ctx.fillStyle = C.yellow; ctx.beginPath(); ctx.arc(lerp(330, 720, e2), 700 - Math.sin(e2 * Math.PI) * 260, 14 - k * 2, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
+      }
+      // phone-book list
+      const lp = P(lt, v(6.6), v(7.0));
+      if (lp > 0) {
+        const rows = [['google.com', '142.250.74.46'], ['youtube.com', '172.217.16.14'], ['kotiki.ru', '93.184.216.34']];
+        ctx.save(); ctx.globalAlpha = eo(lp);
+        ctx.translate(0, (1 - eo(lp)) * 80);
+        ctx.fillStyle = 'rgba(19,26,58,.9)'; rr(110, 960, 860, 390, 30); ctx.fill(); ctx.strokeStyle = 'rgba(244,114,182,.6)'; ctx.lineWidth = 3; ctx.stroke();
+        txt('ТЕЛЕФОННАЯ КНИГА ИНТЕРНЕТА', CX, 1020, 38, C.pink, { w: 800 });
+        rows.forEach((r, i) => {
+          const rp = P(lt, v(6.9 + i * .3), v(7.2 + i * .3)), hi = i === 2 && lt > v(8.0);
+          ctx.save(); ctx.globalAlpha *= rp; ctx.translate((1 - eo(rp)) * -60, 0);
+          if (hi) { ctx.fillStyle = 'rgba(250,204,21,.18)'; rr(140, 1075 + i * 85, 800, 70, 18); ctx.fill(); }
+          txt(r[0], 170, 1110 + i * 85, 44, hi ? C.yellow : C.white, { a: 'left', w: 700 });
+          txt(i === 2 && lt < v(8.0) ? '•••' : r[1], 910, 1110 + i * 85, 44, hi ? C.yellow : C.cyan, { a: 'right', w: 700 });
+          ctx.restore();
+        });
+        ctx.restore();
+      }
+    }
+  },
+
+  ip(lt, d, t) {
+    const oct = ['93', '184', '216', '34'];
+    const up = eio(P(lt, v(4.9), v(5.5)));
+    const y = lerp(820, 560, up), sz = lerp(122, 110, up);
+    ctx.save(); ctx.font = `900 ${sz}px Inter`;
+    const parts = []; oct.forEach((o, i) => { parts.push(o); if (i < 3) parts.push('.'); });
+    const ws = parts.map(p => ctx.measureText(p).width), tot = ws.reduce((a, b) => a + b, 0);
+    let x = CX - tot / 2;
+    parts.forEach((p, i) => {
+      const k = Math.floor(i / 2), pp = P(lt, v(.1 + k * .35), v(.45 + k * .35));
+      const col = i % 2 ? C.white : PAL[k];
+      if (pp > 0) {
+        ctx.save(); ctx.translate(x + ws[i] / 2, y - (1 - eo(pp)) * 300); ctx.globalAlpha = clamp(pp * 3);
+        txt(p, 0, 0, sz, col, { w: 900, glow: col, gb: 25 }); ctx.restore();
+      }
+      x += ws[i];
+    });
+    ctx.restore();
+    // target lock brackets
+    const lk = P(lt, v(2.3), v(2.7));
+    if (lk > 0) {
+      const gx = lerp(560, 500, eo(lk)), gy = lerp(200, 140, eo(lk)) * (1 - up * .25);
+      ctx.save(); ctx.strokeStyle = C.yellow; ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.globalAlpha = clamp(lk * 2);
+      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        ctx.beginPath(); ctx.moveTo(CX + sx * gx, y + sy * gy - sy * 60); ctx.lineTo(CX + sx * gx, y + sy * gy); ctx.lineTo(CX + sx * gx - sx * 60, y + sy * gy); ctx.stroke();
+      }
+      ctx.restore();
+      popTxt('НОМЕР СЕРВЕРА', CX, y - gy - 60, 50, C.yellow, P(lt, v(2.4), v(2.7)), { w: 800 });
+    }
+    pill('IP-АДРЕС', CX, y + 220 * (1 - up * .3), 54, C.cyan, C.ink, P(lt, v(3.5), v(3.8)), { glow: C.cyan });
+    // path to server + knocks
+    const sp = P(lt, v(5.2), v(5.6));
+    if (sp > 0) {
+      ctx.save(); ctx.setLineDash([20, 18]); ctx.lineDashOffset = -lt * 80; ctx.strokeStyle = C.green; ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.moveTo(CX, 820); ctx.lineTo(CX, lerp(820, 1080, eo(sp))); ctx.stroke(); ctx.restore();
+      serverIcon(CX, 1290, 260 * eb(sp), 330 * eb(sp), lt, 0);
+      [5.75, 6.0, 6.25].forEach((k, i) => {
+        const q = lt - v(k);
+        if (q > 0 && q < .8) { ctx.save(); ctx.globalAlpha = 1 - q / .8; ring(CX, 1290, 180 + q * 400, C.green, 8); ctx.restore(); }
+        popTxt('ТУК', CX + (i - 1) * 260, 1560 - i * 0, 64, C.green, P(lt, v(k), v(k) + .2), { w: 900, rot: (i - 1) * .15, al: 1 - P(lt, v(6.8), v(7.0)) });
+      });
+    }
+  },
+
+  packets(lt, d, t) {
+    const N = { S: [170, 1430], A: [400, 1300], B: [200, 1150], C: [580, 1190], D: [790, 1390], E: [910, 1160], F: [300, 640], G: [550, 700], H: [760, 560], I: [180, 450], J: [920, 760], Z: [870, 400] };
+    const PATHS = ['SACEJZ', 'SBFIZ', 'SACGHZ', 'SDEJHZ', 'SBCGJZ', 'SADEHZ'];
+    // request splits into packets
+    const split = v(2.4);
+    const ga = P(lt, v(3.0), v(3.5));
+    // ocean
+    const op = P(lt, v(7.3), v(7.9));
+    if (op > 0) {
+      ctx.save(); ctx.globalAlpha = eo(op);
+      const g = ctx.createLinearGradient(0, 820, 0, 1060); g.addColorStop(0, 'rgba(14,165,233,.0)'); g.addColorStop(.5, 'rgba(14,165,233,.28)'); g.addColorStop(1, 'rgba(14,165,233,.0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 800, W, 280);
+      ctx.strokeStyle = 'rgba(125,211,252,.55)'; ctx.lineWidth = 4;
+      for (let r = 0; r < 3; r++) { ctx.beginPath(); for (let x = 0; x <= W; x += 20) ctx.lineTo(x, 880 + r * 50 + Math.sin(x * .02 + lt * 3 + r) * 12); ctx.stroke(); }
+      ctx.restore();
+      pill('ПОДВОДНЫЕ КАБЕЛИ', CX, 940, 40, '#0ea5e9', C.white, P(lt, v(9.3), v(9.6)), { glow: '#0ea5e9' });
+    }
+    if (ga > 0) {
+      // edges
+      const edges = new Set(); PATHS.forEach(p => { for (let i = 0; i < p.length - 1; i++) edges.add([p[i], p[i + 1]].sort().join('')); });
+      ctx.save(); ctx.globalAlpha = eo(ga);
+      [...edges].forEach((e, i) => {
+        const a = N[e[0]], b = N[e[1]], k = eo(P(lt, v(3.0 + i * .04), v(3.6 + i * .04)));
+        const ocean = (a[1] > 900) !== (b[1] > 900);
+        ctx.strokeStyle = ocean && op > 0 ? `rgba(125,211,252,${.4 + .4 * op})` : 'rgba(167,139,250,.35)'; ctx.lineWidth = ocean && op > 0 ? 6 : 4;
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(lerp(a[0], b[0], k), lerp(a[1], b[1], k)); ctx.stroke();
+      });
+      ctx.restore();
+    }
+    // packets moving
+    const pk = PATHS.map((p, i) => {
+      const pts = [...p].map(c => N[c]);
+      const dep = v(3.7) + i * .32, u = eio(P(lt, dep, dep + 5.6));
+      const L = []; let tot = 0; for (let j = 0; j < pts.length - 1; j++) { const l = Math.hypot(pts[j + 1][0] - pts[j][0], pts[j + 1][1] - pts[j][1]); L.push(l); tot += l; }
+      const at = uu => { let dd = uu * tot; for (let j = 0; j < L.length; j++) { if (dd <= L[j] || j === L.length - 1) { const k = clamp(dd / L[j]); return [lerp(pts[j][0], pts[j + 1][0], k), lerp(pts[j][1], pts[j + 1][1], k)]; } dd -= L[j]; } };
+      return { i, u, at, pos: at(u), dep };
+    });
+    // routers
+    if (ga > 0) {
+      Object.entries(N).forEach(([k, p], i) => {
+        if (k === 'S' || k === 'Z') return;
+        const s = eb(P(lt, v(3.0 + i * .06), v(3.4 + i * .06)));
+        let fl = 0; pk.forEach(q => { if (lt > q.dep) fl = Math.max(fl, Math.exp(-Math.hypot(q.pos[0] - p[0], q.pos[1] - p[1]) / 40)); });
+        ctx.save(); ctx.translate(p[0], p[1]); ctx.scale(s, s);
+        ctx.shadowColor = C.violet; ctx.shadowBlur = 20 + fl * 60;
+        ctx.fillStyle = fl > .3 ? '#c4b5fd' : '#2a1f5c'; ctx.beginPath(); ctx.arc(0, 0, 30, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+        ring(0, 0, 30, C.violet, 5);
+        ctx.strokeStyle = fl > .3 ? C.ink : C.violet; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(14, 0); ctx.moveTo(0, -14); ctx.lineTo(0, 14); ctx.stroke();
+        ctx.restore();
+      });
+      browserIcon(N.S[0], N.S[1], .6 * eb(ga), 'ТЫ');
+      serverIcon(N.Z[0], N.Z[1], 120 * eb(ga), 150 * eb(ga), lt, 0);
+      pill('РОУТЕРЫ', 400, 1060, 38, C.violet, C.ink, P(lt, v(5.75), v(6.1)) * (1 - P(lt, v(7.2), v(7.5))));
+    }
+    // the request block and its split
+    if (lt < split + 1.3) {
+      if (lt < split) {
+        const p = eb(P(lt, 0, .5)), wob = Math.sin(lt * 20) * (lt > split - .5 ? 6 : 0);
+        ctx.save(); ctx.translate(CX + wob, 860); ctx.scale(p, p);
+        ctx.shadowColor = C.cyan; ctx.shadowBlur = 50; ctx.fillStyle = '#123047'; rr(-300, -130, 600, 260, 40); ctx.fill(); ctx.shadowBlur = 0;
+        ctx.strokeStyle = C.cyan; ctx.lineWidth = 6; ctx.stroke();
+        txt('ЗАПРОС', 0, -25, 80, C.white, { w: 900 }); txt('GET kotiki.ru', 0, 55, 40, C.cyan, { w: 600 });
+        ctx.restore();
+      } else {
+        const k = lt - split;
+        for (let i = 0; i < 6; i++) {
+          const a = i / 6 * Math.PI * 2 - Math.PI / 2;
+          const bx = CX + Math.cos(a) * eo(clamp(k / .5)) * 260, by = 860 + Math.sin(a) * eo(clamp(k / .5)) * 260;
+          const g2 = eio(P(k, .7, 1.3));
+          packetBox(lerp(bx, N.S[0], g2), lerp(by, N.S[1], g2), lerp(1.6, .8, g2), PAL[i], i + 1);
+        }
+        popTxt('ПАКЕТЫ', CX, 520, 120, C.yellow, P(lt, v(2.95), v(3.25)) * (1 - P(lt, v(3.6), v(3.9))), { slam: true, w: 900, glow: C.yellow });
+      }
+    }
+    pk.forEach(q => {
+      if (lt < q.dep || q.u >= 1) return;
+      for (let k = 1; k <= 8; k++) { const pp = q.at(clamp(q.u - k * .012)); ctx.globalAlpha = .5 * (1 - k / 8); ctx.fillStyle = PAL[q.i]; ctx.beginPath(); ctx.arc(pp[0], pp[1], 16 - k, 0, 7); ctx.fill(); }
+      ctx.globalAlpha = 1; packetBox(q.pos[0], q.pos[1], .8, PAL[q.i], q.i + 1);
+    });
+  },
+
+  server(lt, d, t) {
+    const sp = eb(P(lt, 0, .6));
+    const arrivals = [0, 1, 2, 3, 4, 5].map(i => v(.3 + i * .28));
+    let glow = 0; arrivals.forEach(a => { if (lt > a) glow = Math.max(glow, Math.exp(-(lt - a) * 6)); });
+    const procG = (lt > v(3.7) && lt < v(5.1)) ? .3 + .2 * Math.sin(lt * 12) : 0;
+    const out = v(5.1);
+    const ej = lt > out ? Math.exp(-(lt - out) * 5) : 0;
+    serverIcon(CX, 900, 380 * sp, 540 * sp, lt, Math.max(glow, procG, ej));
+    pill('СЕРВЕР kotiki.ru', CX, 1240, 40, C.green, C.ink, P(lt, .3, .7));
+    // packets fly in
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * Math.PI * 2 + .4, s0 = [CX + Math.cos(a) * 900, 900 + Math.sin(a) * 900];
+      const u = eio(P(lt, arrivals[i] - .7, arrivals[i]));
+      if (u > 0 && u < 1) packetBox(lerp(s0[0], CX, u), lerp(s0[1], 900, u), lerp(1.2, .5, u), PAL[i], i + 1);
+    }
+    // assemble row
+    const rowEnd = v(3.6);
+    for (let i = 0; i < 6; i++) {
+      const p = P(lt, v(1.9 + i * .1), v(2.4 + i * .1)), m = eio(P(lt, rowEnd, rowEnd + .35));
+      if (p <= 0 || m >= 1) continue;
+      const x = lerp(lerp(CX, CX + (i - 2.5) * 115, eo(p)), CX, m), y = lerp(900, 430, eo(p));
+      packetBox(x, y, 1.4 * (1 - m * .7), PAL[i], i + 1);
+    }
+    pill('GET /kotiki', CX, 430, 52, C.cyan, C.ink, P(lt, rowEnd + .3, rowEnd + .6) * (1 - P(lt, v(5.0), v(5.3))), { glow: C.cyan });
+    // processing gear
+    const gp = inout(lt, v(3.6), v(3.9), v(5.0), v(5.2));
+    if (gp > 0) { ctx.save(); ctx.globalAlpha = gp; gear(CX, 900, 70 * gp, lt * 4, C.yellow); gear(CX + 95, 840, 38 * gp, -lt * 7, C.orange); ctx.restore(); }
+    // document flies out
+    const dp = P(lt, out, out + 1.6);
+    if (dp > 0) {
+      const e = eio(dp), x = CX, y = lerp(900, 2250, e * e), s = lerp(.3, 1.2, eo(clamp(dp * 3))), rot = Math.sin(dp * 6) * .12;
+      ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(rot);
+      ctx.shadowColor = C.cyan; ctx.shadowBlur = 40; ctx.fillStyle = '#f8fafc'; rr(-150, -190, 300, 380, 24); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = C.ink; txt('</>', 0, -110, 70, '#4338ca', { w: 900 });
+      ctx.fillStyle = '#c7d2fe'; for (let i = 0; i < 5; i++) { rr(-110, -40 + i * 40, 220 - (i % 2) * 70, 20, 10); ctx.fill(); }
+      txt('index.html', 0, 160, 32, '#334155', { w: 700 });
+      ctx.restore();
+      pill('200 OK ✓', CX, 430, 64, C.green, C.ink, P(lt, out + .3, out + .6), { glow: C.green });
+    }
+  },
+
+  build(lt, d, t) {
+    const inP = eo(P(lt, 0, .6));
+    const X = 90, Y = lerp(1500, 330, inP), Wd = 900, Hd = 1150;
+    windowFrame(X, Y, Wd, Hd, 'kotiki.ru', 0, false);
+    const ix = 130, iy = Y + 140, iw = 820;
+    const boxes = [[ix, iy, iw, 70, '#312e81'], [ix, iy + 95, iw, 390, '#1e3a8a'], [ix, iy + 510, 253, 290, '#4c1d95'], [ix + 283, iy + 510, 253, 290, '#831843'], [ix + 566, iy + 510, 254, 290, '#14532d']];
+    const lines = [[ix, iy + 840, 760], [ix, iy + 890, 640], [ix, iy + 940, 700]];
+    const wire = v(1.8), style = v(2.5), img = v(3.1), fin = v(4.65);
+    // spinner before
+    if (lt < wire + .2) { ctx.save(); ctx.globalAlpha = 1 - P(lt, wire, wire + .2); ctx.translate(CX, Y + 600); ctx.rotate(lt * 6); ring(0, 0, 60, C.cyan, 12, 0, 4.2); ctx.restore(); }
+    // wireframe
+    boxes.forEach((b, i) => {
+      const p = eo(P(lt, wire + i * .07, wire + .35 + i * .07)), f = eo(P(lt, style + i * .06, style + .35 + i * .06));
+      if (p <= 0) return;
+      ctx.save();
+      if (f > 0) { ctx.globalAlpha = f; const g = ctx.createLinearGradient(b[0], b[1], b[0] + b[2], b[1] + b[3]); g.addColorStop(0, b[4]); g.addColorStop(1, PAL[i % 6] + '88'); ctx.fillStyle = g; rr(b[0], b[1], b[2], b[3], 20); ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.setLineDash([16, 12]); ctx.lineDashOffset = -lt * 40; ctx.strokeStyle = f > 0 ? `rgba(255,255,255,${.4 * (1 - f)})` : C.cyan; ctx.lineWidth = 4;
+      rr(b[0], b[1], b[2] * p, b[3] * p, 20); ctx.stroke();
+      ctx.restore();
+    });
+    lines.forEach((l, i) => { const p = eo(P(lt, wire + .3 + i * .07, wire + .6 + i * .07)); if (p <= 0) return; ctx.fillStyle = P(lt, style, style + .3) > .5 ? 'rgba(248,250,252,.7)' : 'rgba(34,211,238,.4)'; rr(l[0], l[1], l[2] * p, 22, 11); ctx.fill(); });
+    if (P(lt, style, style + .3) > .3) { txt('КОТИКИ.РУ', ix + 30, iy + 36, 36, C.white, { a: 'left', w: 900, al: P(lt, style, style + .3) }); }
+    // images (cats)
+    cat(CX, iy + 300, 130, '#fbbf24', lt, eb(P(lt, img, img + .45)));
+    const cc = ['#fdba74', '#e2e8f0', '#a8a29e'];
+    for (let i = 0; i < 3; i++) cat(ix + 126 + i * 283, iy + 665, 70, cc[i], lt + i, eb(P(lt, img + .15 + i * .12, img + .55 + i * .12)));
+    // labels
+    pill('HTML', 280, 240, 40, C.cyan, C.ink, P(lt, wire, wire + .3));
+    pill('CSS', CX, 240, 40, C.pink, C.ink, P(lt, style, style + .3));
+    pill('КАРТИНКИ', 810, 240, 40, C.yellow, C.ink, P(lt, img, img + .3));
+    // finale: confetti + stamp
+    if (lt > fin) {
+      const k = lt - fin, r = rng(42);
+      for (let i = 0; i < 110; i++) {
+        const a = -Math.PI / 2 + (r() - .5) * 2.6, sp = 900 + r() * 1300, x = CX + Math.cos(a) * sp * k, y = 1000 + Math.sin(a) * sp * k + 1600 * k * k;
+        ctx.save(); ctx.translate(x, y); ctx.rotate(k * (r() * 12 - 6)); ctx.fillStyle = PAL[i % 6]; ctx.fillRect(-10, -6, 20, 12); ctx.restore();
+      }
+      ctx.save(); ctx.translate(CX, Y + 980); ctx.rotate(-.08); const s = lerp(2.4, 1, eo(P(k, 0, .25))); ctx.scale(s, s); ctx.globalAlpha = P(k, 0, .15);
+      ctx.fillStyle = C.yellow; ctx.shadowColor = C.orange; ctx.shadowBlur = 40; rr(-380, -80, 760, 160, 30); ctx.fill(); ctx.shadowBlur = 0;
+      txt('КОТИКИ НА ЭКРАНЕ!', 0, 4, 66, C.ink, { w: 900 }); ctx.restore();
+    }
+  },
+
+  outro(lt, d, t) {
+    // big eye that blinks
+    const mv = eio(P(lt, v(2.8), v(3.4)));
+    const ex = CX, ey = lerp(800, 470, mv), R = lerp(330, 170, mv) * eb(P(lt, 0, .6));
+    const bk = v(2.25), bl = lt > bk && lt < bk + .32 ? Math.sin(P(lt, bk, bk + .32) * Math.PI) : 0;
+    const open = 1 - bl;
+    if (R > 0) {
+      ctx.save(); ctx.translate(ex, ey);
+      ctx.beginPath(); ctx.moveTo(-R, 0); ctx.quadraticCurveTo(0, -R * 1.1 * open, R, 0); ctx.quadraticCurveTo(0, R * 1.1 * open, -R, 0); ctx.closePath();
+      ctx.shadowColor = C.cyan; ctx.shadowBlur = 50; ctx.fillStyle = '#f1f5f9'; ctx.fill(); ctx.shadowBlur = 0;
+      ctx.save(); ctx.clip();
+      const lx = Math.sin(lt * 1.5) * R * .18, ly = Math.cos(lt * 1.1) * R * .08;
+      const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, R * .45); g.addColorStop(0, C.cyan); g.addColorStop(.7, '#6366f1'); g.addColorStop(1, '#312e81');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(lx, ly, R * .45, 0, 7); ctx.fill();
+      ctx.fillStyle = '#020617'; ctx.beginPath(); ctx.arc(lx, ly, R * .2, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(lx + R * .1, ly - R * .1, R * .07, 0, 7); ctx.fill();
+      ctx.restore();
+      ctx.strokeStyle = C.cyan; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(-R, 0); ctx.quadraticCurveTo(0, -R * 1.1 * open, R, 0); ctx.quadraticCurveTo(0, R * 1.1 * open, -R, 0); ctx.stroke();
+      ctx.restore();
+    }
+    if (bl > 0) { ctx.save(); ctx.globalAlpha = bl * .25; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+    popTxt('БЫСТРЕЕ, ЧЕМ', CX, 1230 - mv * 2000, 90, C.white, P(lt, v(.2), v(.5)), { slam: true, w: 900 });
+    popTxt('ТЫ МОРГНЁШЬ', CX, 1340 - mv * 2000, 90, C.cyan, P(lt, v(1.2), v(1.5)), { slam: true, w: 900, glow: C.cyan });
+    // recap chain
+    const steps = [['⌨', 'Адрес', C.cyan], ['DNS', 'Книга', C.pink], ['▦', 'Пакеты', C.yellow], ['▤', 'Сервер', C.green], ['★', 'Сайт', C.violet]];
+    steps.forEach((s, i) => {
+      const p = P(lt, v(2.95 + i * .14), v(3.3 + i * .14)); if (p <= 0) return;
+      const x = 130 + i * 205, y = 800;
+      if (i > 0) { ctx.save(); ctx.globalAlpha = p; ctx.strokeStyle = 'rgba(248,250,252,.5)'; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x - 140, y); ctx.lineTo(x - 140 + 75 * eo(p), y); ctx.stroke(); ctx.restore(); }
+      ctx.save(); ctx.translate(x, y); ctx.scale(eb(p), eb(p));
+      ctx.shadowColor = s[2]; ctx.shadowBlur = 30; ctx.fillStyle = '#131a3a'; ctx.beginPath(); ctx.arc(0, 0, 66, 0, 7); ctx.fill(); ctx.shadowBlur = 0; ring(0, 0, 66, s[2], 6);
+      txt(s[0], 0, 4, s[0].length > 1 ? 36 : 56, s[2], { w: 900 }); txt(s[1], 0, 110, 32, C.white, { w: 700 });
+      ctx.restore();
+    });
+    const tp = P(lt, v(3.2), v(3.5));
+    popTxt('ВОТ ТАК РАБОТАЕТ', CX, 1110, 92, C.white, tp, { slam: true, w: 900 });
+    popTxt('ИНТЕРНЕТ', CX, 1240, 150, C.yellow, P(lt, v(3.9), v(4.2)), { slam: true, w: 900, glow: C.orange, gb: 50 });
+  },
+};
+
+// phrase captions, in voice time
+const CAPS = {
+  hook: [[0, 'Что происходит,'], [1.45, 'когда ты открываешь сайт?'], [3.45, 'За 0,1 секунды —'], [5.3, 'целое приключение'], [7.7, 'Погнали!']],
+  type: [[0.1, 'Ты вводишь адрес'], [1.3, 'например, kotiki.ru'], [3.6, 'и жмёшь Enter']],
+  dns: [[0, 'Компьютеры не понимают названий'], [2.7, 'Им нужны цифры'], [3.99, 'Браузер спрашивает DNS'], [6.54, 'Это телефонная книга интернета']],
+  ip: [[0, 'DNS находит номер сервера'], [3.47, '— IP-адрес'], [5.24, 'Теперь браузер знает, куда стучаться']],
+  packets: [[0, 'Запрос режется на кусочки'], [3.0, '— пакеты'], [3.66, 'Каждый летит своим путём'], [5.75, 'через десятки роутеров'], [7.5, 'А иногда — через океан'], [9.36, 'по подводным кабелям']],
+  server: [[0.1, 'Пакеты добираются до сервера'], [2.25, 'Он собирает их'], [3.65, 'и отправляет страницу обратно']],
+  build: [[0, 'Браузер собирает сайт'], [1.82, 'Каркас'], [2.5, 'Стили'], [3.12, 'Картинки'], [3.9, 'И вот —'], [4.69, 'котики на экране!']],
+  outro: [[0, 'Быстрее, чем ты моргнёшь'], [3.25, 'Вот так работает интернет']],
+};
+const TITLES = { type: 'АДРЕС', dns: 'DNS', ip: 'IP', packets: 'ПАКЕТЫ', server: 'СЕРВЕР', build: 'БРАУЗЕР', outro: 'ФИНАЛ' };
+
+// sound effects: [scene, local time, type]
+const SFX_LOCAL = [
+  ['hook', v(0.05), 'boom'], ['hook', v(1.45), 'pop'], ['hook', v(3.5), 'rise'], ['hook', v(5.4), 'pop'], ['hook', v(5.65), 'pop'], ['hook', v(7.65), 'boom'],
+  ...[...Array(9)].map((_, i) => ['type', v(2.0) + (i + 1) / 9 - .05, 'key']), ['type', v(3.5), 'pop'], ['type', v(4.0), 'thud'],
+  ['dns', 0.1, 'pop'], ['dns', v(1.4), 'err'], ['dns', v(2.6), 'glitch'], ['dns', v(3.9), 'pop'], ['dns', v(4.3), 'pop'], ['dns', v(4.6), 'swish'], ['dns', v(6.6), 'pop'], ['dns', v(8.0), 'ding'],
+  ...[0, 1, 2, 3].map(k => ['ip', v(.1 + k * .35), 'drop']), ['ip', v(2.3), 'lock'], ['ip', v(3.5), 'pop'], ['ip', v(5.2), 'swish'], ['ip', v(5.75), 'knock'], ['ip', v(6.0), 'knock'], ['ip', v(6.25), 'knock'],
+  ['packets', 0.05, 'pop'], ['packets', v(2.4), 'burst'], ['packets', v(2.95), 'boom'], ['packets', v(3.7), 'swish'], ['packets', v(5.75), 'pop'], ['packets', v(7.3), 'wave'], ['packets', v(9.3), 'pop'],
+  ...[0, 1, 2, 3, 4, 5].map(i => ['server', v(.3 + i * .28), 'drop']), ['server', v(1.9), 'rise'], ['server', v(3.9), 'pop'], ['server', v(5.1), 'swish'], ['server', v(5.4), 'ding'],
+  ['build', v(1.8), 'pop'], ['build', v(2.5), 'pop'], ['build', v(3.1), 'pop'], ['build', v(3.3), 'pop'], ['build', v(3.5), 'pop'], ['build', v(4.65), 'boom'], ['build', v(4.7), 'confetti'],
+  ['outro', v(.2), 'pop'], ['outro', v(1.2), 'pop'], ['outro', v(2.25), 'blink'], ['outro', v(3.2), 'boom'], ['outro', v(3.9), 'ding'],
+];
+const SFX = [];
+TL.forEach((s, i) => { if (i > 0) SFX.push([s.start - .3, 'whoosh']); });
+SFX_LOCAL.forEach(([id, lt, ty]) => { const s = TL.find(x => x.id === id); if (s) SFX.push([+(s.start + s.toNew(lt)).toFixed(3), ty]); });
+const BOOMS = SFX.filter(s => s[1] === 'boom').map(s => s[0]);
+
+function captions(id, lt) {
+  const caps = CAPS[id]; if (!caps) return;
+  const vt = lt - VO; let cur = -1;
+  caps.forEach((c, i) => { if (vt >= c[0]) cur = i; });
+  const sc = TL.find(s => s.id === id);
+  if (cur < 0 || vt > sc.odur + .3) return;
+  const [ct, s] = caps[cur], p = P(vt, ct, ct + .25);
+  ctx.save(); ctx.translate(CX, 1720); const k = eb(p); ctx.scale(k, k);
+  ctx.font = '800 54px Inter';
+  let w = ctx.measureText(s).width, size = 54; if (w > 940) { size = 54 * 940 / w; ctx.font = `800 ${size}px Inter`; w = 940; }
+  ctx.fillStyle = 'rgba(5,7,20,.72)'; rr(-w / 2 - 36, -56, w + 72, 112, 30); ctx.fill();
+  ctx.strokeStyle = 'rgba(250,204,21,.6)'; ctx.lineWidth = 3; ctx.stroke();
+  txt(s, 0, 3, size, C.white, { w: 800 });
+  ctx.restore();
+}
+
+function header(t, idx) {
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; rr(60, 60, W - 120, 10, 5); ctx.fill();
+  const g = ctx.createLinearGradient(60, 0, W - 60, 0); g.addColorStop(0, C.cyan); g.addColorStop(.5, C.pink); g.addColorStop(1, C.yellow);
+  ctx.fillStyle = g; rr(60, 60, (W - 120) * clamp(t / TOTAL), 10, 5); ctx.fill();
+  txt('КАК РАБОТАЕТ ИНТЕРНЕТ', 60, 125, 34, 'rgba(248,250,252,.75)', { a: 'left', w: 800 });
+  txt(String(idx + 1).padStart(2, '0') + ' / ' + String(TL.length).padStart(2, '0'), W - 60, 125, 34, C.yellow, { a: 'right', w: 800 });
+}
+
+function wipe(t) {
+  for (let i = 1; i < TL.length; i++) {
+    const T = TL[i].start, w = P(t, T - .38, T + .38); if (w <= 0 || w >= 1) continue;
+    const bw = W + 900;
+    [[C.cyan, -.12], [C.pink, -.06], ['#2a1065', 0]].forEach(([col, off]) => {
+      const e = eio(clamp(w + off * -1)), x0 = lerp(-bw - 500, W + 500, e);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x0 + 400, 0); ctx.lineTo(x0 + bw + 400, 0); ctx.lineTo(x0 + bw, H); ctx.lineTo(x0, H); ctx.closePath(); ctx.fill();
+    });
+    const a = 1 - Math.abs(w - .5) * 7;
+    if (a > 0 && TITLES[TL[i].id]) txt(TITLES[TL[i].id], CX, H / 2, 110, C.white, { w: 900, al: a, glow: C.pink, gb: 40 });
+  }
+}
+
+function draw(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  bg(t);
+  let idx = TL.findIndex(s => t >= s.start && t < s.start + s.len); if (idx < 0) idx = TL.length - 1;
+  const sc = TL[idx], ltn = t - sc.start, lt = sc.toOld(ltn);
+  let sx = 0, sy = 0;
+  BOOMS.forEach(b => { if (t > b && t < b + .6) { const a = 22 * Math.exp(-(t - b) * 7); sx += Math.sin(t * 90) * a; sy += Math.cos(t * 77) * a; } });
+  const z = 1 + .14 * (1 - eo(P(ltn, 0, .7))) + .012 * ltn;
+  ctx.save(); ctx.translate(CX + sx, H / 2 + sy); ctx.scale(z, z); ctx.translate(-CX, -H / 2);
+  SCENES[sc.id](lt, sc.len, t);
+  ctx.restore();
+  captions(sc.id, lt);
+  header(t, idx);
+  wipe(t);
+  // vignette
+  const g = ctx.createRadialGradient(CX, H / 2, H * .35, CX, H / 2, H * .75); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.45)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // fade in / out
+  const f = Math.max(1 - P(t, 0, .35), P(t, TOTAL - .7, TOTAL));
+  if (f > 0) { ctx.fillStyle = `rgba(3,4,12,${f})`; ctx.fillRect(0, 0, W, H); }
+}
+
+window.renderAt = t => { draw(t); };
+window.frameJPEG = t => { draw(t); return cv.toDataURL('image/jpeg', .92); };
+window.META = { TOTAL, SFX, TL };
+window.READY = document.fonts.load('800 50px Inter').then(() => document.fonts.load('900 50px Inter')).then(() => document.fonts.load('600 50px Inter')).then(() => document.fonts.load('700 50px Inter'));
+
+if (!location.search.includes('render')) {
+  const audio = new Audio('audio.m4a');
+  let start = null;
+  const loop = now => { const tt = audio.paused && start === null ? 0 : (audio.duration ? audio.currentTime : (now - start) / 1000); draw(tt % TOTAL); requestAnimationFrame(loop); };
+  window.READY.then(() => requestAnimationFrame(loop));
+  cv.addEventListener('click', () => { start = performance.now(); audio.currentTime = 0; audio.play().catch(() => {}); });
+}
+</script></body></html>
