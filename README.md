@@ -22,10 +22,9 @@
 
 ```bash
 pip install numpy
-# опционально: озвучка ElevenLabs
-export ELEVENLABS_API_KEY=...      # ключ не коммитить!
-export ELEVENLABS_VOICE_ID=...     # по желанию
-./make.sh
+./make.sh            # с текущей озвучкой
+./make.sh --eleven   # с озвучкой ElevenLabs (ключ — Network secret для api.elevenlabs.io
+                     # с заголовком xi-api-key, или переменная ELEVENLABS_API_KEY)
 ```
 
 Нужны `ffmpeg`, Node.js с Playwright и Chromium.

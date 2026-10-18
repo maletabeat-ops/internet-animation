@@ -1,10 +1,11 @@
 """Озвучка через ElevenLabs + автоподгонка таймингов анимации.
-Нужны: ELEVENLABS_API_KEY (и опционально ELEVENLABS_VOICE_ID).
+Ключ: либо Network secret окружения (прокси сам добавит заголовок xi-api-key
+для api.elevenlabs.io), либо переменная ELEVENLABS_API_KEY. Голос: ELEVENLABS_VOICE_ID (опционально).
 Запуск: python3 elevenlabs.py && node render.mjs video && python3 audio.py && (mux)
 """
 import os, json, base64, subprocess, urllib.request
 
-KEY = os.environ['ELEVENLABS_API_KEY']
+KEY = os.environ.get('ELEVENLABS_API_KEY')
 VOICE = os.environ.get('ELEVENLABS_VOICE_ID', 'JBFqnCBsd6RMkjVDRZzb')
 MODEL = os.environ.get('ELEVENLABS_MODEL', 'eleven_multilingual_v2')
 
@@ -36,7 +37,7 @@ for sid, (text, anchors) in SCENES.items():
         f'https://api.elevenlabs.io/v1/text-to-speech/{VOICE}/with-timestamps?output_format=mp3_44100_128',
         data=json.dumps({'text': text, 'model_id': MODEL,
                          'voice_settings': {'stability': 0.4, 'similarity_boost': 0.8, 'style': 0.35, 'use_speaker_boost': True}}).encode(),
-        headers={'xi-api-key': KEY, 'Content-Type': 'application/json'})
+        headers={'Content-Type': 'application/json', **({'xi-api-key': KEY} if KEY else {})})
     r = json.load(urllib.request.urlopen(req, timeout=120))
     open(f'voice11/{sid}.mp3', 'wb').write(base64.b64decode(r['audio_base64']))
     subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', f'voice11/{sid}.mp3', f'voice/{sid}.wav'], check=True)
