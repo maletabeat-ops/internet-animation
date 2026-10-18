@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Деньги не пахнут</title>
+<style>html,body{margin:0;background:#f6f0e2;overflow:hidden}canvas{display:block;width:100vw;height:100vh;object-fit:contain}</style>
+</head><body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W = 1080, H = 1920, VO = .6, FEET = 1430;
+const WD = /*WORDS*/null || { dur: 18.8, words: [] };
+const TOTAL = VO + WD.dur + 2.0;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const INK = '#2b2622';
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const P = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ss = k => k * k * (3 - 2 * k);
+const eo = k => 1 - Math.pow(1 - k, 3);
+const eback = k => { const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };
+const hash = n => { n = Math.sin(n * 127.1 + 311.7) * 43758.5453; return n - Math.floor(n); };
+const at = (o, a, len) => ({ x: o.x + len * Math.sin(a), y: o.y + len * Math.cos(a) });
+const win = (t, a, b, fi = .2, fo = .2) => clamp(Math.min(P(t, a, a + fi), 1 - P(t, b - fo, b)));
+
+// ---------- word timings ----------
+const WORDS = WD.words.map(w => ({ ...w, t0: w.t0 + VO, t1: w.t1 + VO }));
+function WT(sub, nth = 1, fb = 0) { let k = 0; for (const w of WORDS) if (w.w.toLowerCase().includes(sub)) { if (++k === nth) return w.t0; } return fb; }
+function WE(sub, nth = 1, fb = 0) { let k = 0; for (const w of WORDS) if (w.w.toLowerCase().includes(sub)) { if (++k === nth) return w.t1; } return fb; }
+const T = {
+  rome: WT('рим', 1, 1.1), money: WT('деньги', 1, 4), tax: WT('налог', 1, 5.7), toilet: WT('туалет', 1, 7.8), son: WT('сын', 1, 8.7),
+  rage: WT('ярост', 1, 9.7), shame: WT('позор', 1, 10.6), vesp2: WT('веспасиан', 2, 12), nose: WT('носу', 1, 13.4), coin: WT('монету', 1, 13.7),
+  smell: WT('пахнет', 1, 15), no: WT('нет', 1, 16.3), exactly: WT('вот', 1, 17.1), money2: WT('деньги', 2, 18.1), end: WE('пахнут', 2, 19.4),
+};
+const GROUPS = []; { let g = null;
+  WORDS.forEach((w, i) => { const prev = WORDS[i - 1];
+    if (!g || g.words.length >= 3 || /[.,!?:…]$/.test(prev.w) || w.t0 - prev.t1 > .35) { g = { words: [], t0: w.t0 }; GROUPS.push(g); }
+    g.words.push(w.w.replace(/\.\.\./, '').replace(/[.,:…]+$/, '')); g.t1 = w.t1; });
+  GROUPS.forEach((g, i) => { g.end = i + 1 < GROUPS.length ? Math.min(GROUPS[i + 1].t0, g.t1 + .6) : g.t1 + .8; }); }
+const talking = (t, a, b) => t > a && t < b ? Math.abs(Math.sin(t * 17)) : 0;
+
+// ---------- hand-drawn lines (boil 10 fps) ----------
+let sid = 0, boil = 0;
+const jit = k => (hash(sid * 13.71 + k * 7.31 + boil * 91.17) - .5) * 2;
+function wpath(pts, amp = 1.6, closed = false) {
+  sid++; const out = [], seq = closed ? [...pts, pts[0]] : pts;
+  for (let i = 0; i < seq.length - 1; i++) { const a = seq[i], b = seq[i + 1], n = Math.max(1, Math.round(Math.hypot(b.x - a.x, b.y - a.y) / 26)); for (let j = 0; j < n; j++) out.push({ x: lerp(a.x, b.x, j / n), y: lerp(a.y, b.y, j / n) }); }
+  if (!closed) out.push(seq[seq.length - 1]);
+  out.forEach((p, i) => { p.x += jit(i) * amp; p.y += jit(i + 500) * amp; });
+  ctx.beginPath(); ctx.moveTo(out[0].x, out[0].y);
+  for (let i = 1; i < out.length - 1; i++) ctx.quadraticCurveTo(out[i].x, out[i].y, (out[i].x + out[i + 1].x) / 2, (out[i].y + out[i + 1].y) / 2);
+  ctx.lineTo(out[out.length - 1].x, out[out.length - 1].y); if (closed) ctx.closePath();
+}
+function ink(w = 4, col = INK) { ctx.lineWidth = w; ctx.strokeStyle = col; ctx.lineCap = ctx.lineJoin = 'round'; ctx.stroke(); }
+function shape(pts, fill, w = 4) { wpath(pts, 1.4, true); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (w) ink(w); }
+function wline(pts, w = 4, col = INK) { wpath(pts, 1.4); ink(w, col); }
+const circ = (cx, cy, r, n = 20, sx = 1) => Array.from({ length: n }, (_, i) => ({ x: cx + r * sx * Math.cos(i / n * 6.283), y: cy + r * Math.sin(i / n * 6.283) }));
+function txtHand(s, x, y, size, col = INK, rot = 0, stroke = '#f6f0e2') {
+  ctx.save(); ctx.translate(x + jit(1) * .8, y + jit(2) * .8); ctx.rotate(rot + jit(3) * .004); ctx.font = `900 ${size}px Inter`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  if (stroke) { ctx.lineWidth = size * .16; ctx.strokeStyle = stroke; ctx.strokeText(s, 0, 0); } ctx.fillStyle = col; ctx.fillText(s, 0, 0); ctx.restore();
+}
+
+// ---------- paper texture ----------
+const tex = document.createElement('canvas'); tex.width = W; tex.height = H;
+{ const g = tex.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); let s = 11; const r = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 9000; i++) { g.fillStyle = `rgba(120,95,60,${r() * .022})`; g.beginPath(); g.arc(r() * W, r() * H, 3 + r() * 22, 0, 7); g.fill(); }
+  for (let i = 0; i < 60000; i++) { g.fillStyle = `rgba(90,70,40,${r() * .08})`; g.fillRect(r() * W, r() * H, 1.5, 1.5); } }
+
+// ---------- background ----------
+function background(t) {
+  ctx.fillStyle = '#f7f1e3'; ctx.fillRect(0, 0, W, H);
+  // sea band + doodle waves
+  wpath([{ x: -20, y: 860 }, { x: W + 20, y: 860 }, { x: W + 20, y: 1040 }, { x: -20, y: 1040 }], 1.2, true); ctx.fillStyle = '#b9dce6'; ctx.fill();
+  wline([{ x: -20, y: 860 }, { x: W + 20, y: 862 }], 3, 'rgba(43,38,34,.55)');
+  for (let i = 0; i < 9; i++) { const x = (i * 137 + t * 14) % 1180 - 60, y = 900 + (i % 3) * 42; wline([{ x, y }, { x: x + 16, y: y - 7 }, { x: x + 32, y }], 2.5, 'rgba(60,110,130,.55)'); }
+  // sand
+  wpath([{ x: -20, y: 1040 }, { x: W + 20, y: 1030 }, { x: W + 20, y: 1520 }, { x: -20, y: 1520 }], 1.2, true); ctx.fillStyle = '#dfc796'; ctx.fill();
+  wline([{ x: -20, y: 1040 }, { x: W + 20, y: 1032 }], 3, 'rgba(43,38,34,.5)');
+  wline([{ x: -20, y: 1520 }, { x: W + 20, y: 1522 }], 3, 'rgba(43,38,34,.35)');
+  for (let i = 0; i < 18; i++) { const x = hash(i) * W, y = 1080 + hash(i + 5) * 400; wline([{ x, y }, { x: x + 14, y: y + 1 }], 2, 'rgba(120,90,50,.35)'); }
+  // distant temple on the shore
+  { const x = 120, y = 1046;
+    shape([{ x: x - 70, y: y - 60 }, { x, y: y - 100 }, { x: x + 70, y: y - 60 }], '#efe6cf', 3);
+    shape([{ x: x - 66, y: y - 60 }, { x: x + 66, y: y - 60 }, { x: x + 66, y }, { x: x - 66, y }], '#efe6cf', 3);
+    for (let k = -2; k <= 2; k++) wline([{ x: x + k * 26, y: y - 54 }, { x: x + k * 26, y: y - 4 }], 3); }
+  // column (ionic), right
+  { const x = 860, top = 760, bot = 1150;
+    shape([{ x: x - 44, y: top }, { x: x + 44, y: top }, { x: x + 40, y: top + 26 }, { x: x - 40, y: top + 26 }], '#ece6d6', 3.5);
+    wpath(circ(x - 44, top + 14, 14), 1, true); ctx.fillStyle = '#ece6d6'; ctx.fill(); ink(3); wpath(circ(x + 44, top + 14, 14), 1, true); ctx.fill(); ink(3);
+    shape([{ x: x - 30, y: top + 26 }, { x: x + 30, y: top + 26 }, { x: x + 33, y: bot - 26 }, { x: x - 33, y: bot - 26 }], '#ece6d6', 3.5);
+    for (const k of [-16, 0, 16]) wline([{ x: x + k, y: top + 34 }, { x: x + k * 1.05, y: bot - 34 }], 2.2, 'rgba(43,38,34,.55)');
+    shape([{ x: x - 50, y: bot - 26 }, { x: x + 50, y: bot - 26 }, { x: x + 56, y: bot }, { x: x - 56, y: bot }], '#ece6d6', 3.5); }
+  // sun doodle
+  wpath(circ(940, 300, 54), 1.2, true); ctx.fillStyle = '#ffd86a'; ctx.fill(); ink(3.5);
+  for (let i = 0; i < 9; i++) { const a = i / 9 * 6.283 + t * .2; wline([{ x: 940 + Math.cos(a) * 74, y: 300 + Math.sin(a) * 74 }, { x: 940 + Math.cos(a) * 98, y: 300 + Math.sin(a) * 98 }], 3.5); }
+}
+
+// ---------- characters ----------
+// pose: arms [shoulderAngle, elbowAngle] measured from "down", + = towards screen right
+function person(o) {
+  const { x, feet = FEET, t } = o;
+  const bob = o.bob || 0, hemY = feet - 118 + bob, shY = hemY - 222, hc = { x: x + (o.lean || 0) * 40, y: shY - 78 };
+  // legs + sandals
+  const lgs = o.legs || [0, 0];
+  for (const [s, a] of [[-1, lgs[0]], [1, lgs[1]]]) {
+    const h = { x: x + s * 26, y: hemY - 6 }, f = at(h, a, 120);
+    wline([h, f], 4.5);
+    if (o.sandals !== false) { wpath(circ(f.x + s * 6, f.y + 2, 18, 12, 1.5).map(p => ({ x: p.x, y: Math.max(p.y, f.y - 4) })), 1, true); ctx.fillStyle = '#8d5a36'; ctx.fill(); ink(3); wline([{ x: f.x - 10, y: f.y - 10 }, { x: f.x + 10, y: f.y - 2 }], 2.5, '#6b3f22'); }
+  }
+  // tunic / toga
+  const sw = 58, hw = 92, L = o.lean || 0;
+  const body = [{ x: x - sw + L * 30, y: shY }, { x: x + sw + L * 30, y: shY }, { x: x + sw + 30, y: shY + 70 }, { x: x + hw, y: hemY }, { x: x - hw, y: hemY }, { x: x - sw - 30, y: shY + 70 }];
+  shape(body, o.cloth, 4);
+  if (o.toga) { // purple border + sash
+    wpath([{ x: x - sw + L * 30, y: shY + 4 }, { x: x - sw + 22 + L * 30, y: shY }, { x: x + hw - 6, y: hemY - 40 }, { x: x + hw - 20, y: hemY - 6 }], 1, true); ctx.fillStyle = '#7d3c98'; ctx.fill(); ink(2.5);
+    wline([{ x: x - hw + 6, y: hemY - 12 }, { x: x + hw - 6, y: hemY - 12 }], 8, '#7d3c98');
+  }
+  if (o.belt) wline([{ x: x - sw - 22, y: shY + 120 }, { x: x + sw + 22, y: shY + 120 }], 7, o.belt);
+  // arms
+  const arm = (s, a) => { const sh = { x: x + s * (sw - 6) + L * 30, y: shY + 18 }, e = at(sh, a[0], 84), hnd = at(e, a[1], 78); wline([sh, e, hnd], 4.5); wpath(circ(hnd.x, hnd.y, 9, 10), 1, true); ctx.fillStyle = '#fbf8f0'; ctx.fill(); ink(3); return hnd; };
+  const hL = arm(-1, o.armL || [-.15, -.05]), hR = arm(1, o.armR || [.15, .05]);
+  // head
+  ctx.save(); ctx.translate(hc.x, hc.y); ctx.rotate(o.tilt || 0);
+  wpath(circ(0, 0, 92, 26), 1.3, true); ctx.fillStyle = o.red ? `rgb(255,${Math.round(250 - o.red * 70)},${Math.round(245 - o.red * 90)})` : '#fdfbf6'; ctx.fill(); ink(4.5);
+  if (o.hair) { for (let i = 0; i < 7; i++) { const a = -2.4 + i * .27; wpath(circ(Math.cos(a) * 82, Math.sin(a) * 82, 17, 10), 1, true); ctx.fillStyle = '#6b4426'; ctx.fill(); ink(3); } }
+  if (o.wreath) for (const s of [-1, 1]) for (let i = 0; i < 4; i++) { const a = -Math.PI / 2 + s * (.55 + i * .28), lx = Math.cos(a) * 92, ly = Math.sin(a) * 92;
+    ctx.save(); ctx.translate(lx, ly); ctx.rotate(a + Math.PI / 2 + s * .5); wpath([{ x: 0, y: -15 }, { x: 8, y: 0 }, { x: 0, y: 15 }, { x: -8, y: 0 }], 1, true); ctx.fillStyle = '#6aa84f'; ctx.fill(); ink(2.5); ctx.restore(); }
+  const F = o.face || {}, lx = (F.lookX || 0) * 26, ly = (F.lookY || 0) * 10;
+  // eyes
+  const big = F.shock || 0, closed = F.closed;
+  for (const s of [-1, 1]) {
+    const ex = lx + s * 26, ey = -8 + ly;
+    if (closed) wline([{ x: ex - 11, y: ey }, { x: ex, y: ey + 5 }, { x: ex + 11, y: ey }], 3.5);
+    else if (big > .3) { wpath(circ(ex, ey, 14 * big + 4, 12), 1, true); ctx.fillStyle = '#fff'; ctx.fill(); ink(3); ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(ex, ey, 5, 0, 7); ctx.fill(); }
+    else { ctx.fillStyle = INK; ctx.beginPath(); ctx.ellipse(ex, ey, 6.5, (F.blink ? 1.5 : 8), 0, 0, 7); ctx.fill(); }
+    // brows: angry < 0, worried > 0
+    const b = F.brow || 0; wline([{ x: ex - s * 14, y: ey - 26 - b * 6 }, { x: ex + s * 14, y: ey - 26 + b * 8 }], 3.5);
+  }
+  if (F.wrinkles) { wline([{ x: lx - 30, y: -54 }, { x: lx + 30, y: -54 }], 2.2, 'rgba(43,38,34,.6)'); wline([{ x: lx - 22, y: -64 }, { x: lx + 22, y: -64 }], 2.2, 'rgba(43,38,34,.6)'); }
+  if (F.nose) wline([{ x: lx + 4, y: 6 }, { x: lx + 10, y: 18 }, { x: lx + 2, y: 20 }], 3);
+  // mouth
+  const mx = lx, my = 34 + ly, m = F.mouth || 'flat', talk = F.talk || 0;
+  if (talk > .15 || m === 'o' || m === 'shout') { const r = m === 'shout' ? 18 + talk * 8 : m === 'o' ? 12 : 6 + talk * 10; wpath(circ(mx, my + 2, r, 12, m === 'shout' ? 1.5 : 1), 1, true); ctx.fillStyle = '#7a2e2a'; ctx.fill(); ink(3); }
+  else if (m === 'smile') wline([{ x: mx - 22, y: my - 4 }, { x: mx, y: my + 8 }, { x: mx + 22, y: my - 4 }], 3.5);
+  else if (m === 'smug') wline([{ x: mx - 20, y: my + 2 }, { x: mx + 4, y: my + 4 }, { x: mx + 22, y: my - 8 }], 3.5);
+  else if (m === 'wavy') wline([{ x: mx - 24, y: my }, { x: mx - 12, y: my - 6 }, { x: mx, y: my + 2 }, { x: mx + 12, y: my - 6 }, { x: mx + 24, y: my }], 3.5);
+  else if (m === 'frown') wline([{ x: mx - 18, y: my + 6 }, { x: mx, y: my - 2 }, { x: mx + 18, y: my + 6 }], 3.5);
+  else wline([{ x: mx - 14, y: my }, { x: mx + 14, y: my + 1 }], 3.5);
+  if (F.blush) { ctx.fillStyle = 'rgba(230,90,80,.25)'; for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(lx + s * 48, 20, 16, 9, 0, 0, 7); ctx.fill(); } }
+  ctx.restore();
+  return { hL, hR, head: hc };
+}
+
+// ---------- props ----------
+function podium() {
+  shape([{ x: 560, y: 1078 }, { x: 790, y: 1060 }, { x: 800, y: 1098 }, { x: 566, y: 1112 }], '#b48a5c', 4);
+  shape([{ x: 586, y: 1110 }, { x: 772, y: 1098 }, { x: 778, y: 1440 }, { x: 590, y: 1444 }], '#a77d52', 4);
+  for (const k of [.25, .5, .75]) { const x = lerp(590, 776, k); wline([{ x, y: 1116 }, { x: x + 2, y: 1436 }], 2.2, 'rgba(43,38,34,.45)'); }
+}
+function amphora(cx, cy, rot, s = 1) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot); ctx.scale(s, s);
+  shape([{ x: -14, y: -58 }, { x: 14, y: -58 }, { x: 16, y: -42 }, { x: 40, y: -12 }, { x: 36, y: 26 }, { x: 14, y: 54 }, { x: -14, y: 54 }, { x: -36, y: 26 }, { x: -40, y: -12 }, { x: -16, y: -42 }], '#c8573a', 4);
+  for (const s2 of [-1, 1]) wline([{ x: s2 * 16, y: -46 }, { x: s2 * 40, y: -44 }, { x: s2 * 34, y: -18 }], 4);
+  wline([{ x: -30, y: 4 }, { x: 30, y: 4 }], 2.5, 'rgba(43,38,34,.5)');
+  ctx.restore();
+}
+function fire(t, x, y) {
+  for (const [s, col, h] of [[1, '#ffb52e', 150], [.62, '#ff7a1f', 96]]) {
+    const pts = []; for (let i = 0; i <= 10; i++) { const a = Math.PI + i / 10 * Math.PI, fl = Math.sin(t * 9 + i * 1.7) * 10 * s; pts.push({ x: x + Math.cos(a) * 62 * s, y: y + Math.sin(a) * 30 * s - (i % 2 ? h * s * (.6 + .4 * Math.sin(t * 6 + i)) : 0) + fl }); }
+    pts.push({ x: x + 62 * s, y }, { x: x - 62 * s, y }); shape(pts, col, 3.5);
+  }
+  for (let i = 0; i < 3; i++) { const a = (t * .8 + i / 3) % 1; wpath(circ(x + Math.sin(a * 9 + i) * 20, y - 170 - a * 140, 10 * (1 - a), 8), 1, true); ctx.fillStyle = `rgba(255,170,50,${1 - a})`; ctx.fill(); }
+}
+function coin(x, y, r = 22) { wpath(circ(x, y, r, 14), 1, true); ctx.fillStyle = '#f2c230'; ctx.fill(); ink(3.5); wpath(circ(x, y, r * .6, 10), 1, true); ink(2, 'rgba(120,80,10,.7)'); }
+function coinPile(t, x, y, extra) {
+  const cols = [[0, 6], [44, 9 + Math.floor(extra * 6)], [88, 4 + Math.floor(extra * 8)], [-44, Math.floor(extra * 7)]];
+  for (const [dx, n] of cols) for (let i = 0; i < n; i++) { const cy = y - i * 13; wpath(circ(x + dx, cy, 24, 12, 1).map(p => ({ x: p.x, y: cy + (p.y - cy) * .35 })), .8, true); ctx.fillStyle = i % 2 ? '#f2c230' : '#e3ad1d'; ctx.fill(); ink(2.6); }
+}
+function scroll(t) {
+  const open = clamp(eo(P(t, T.tax - .25, T.tax + .3)) - ss(P(t, T.son - .3, T.son + .1))); if (open <= 0) return;
+  const cx = W / 2, cy = 470, hw = 400 * open, hh = 200;
+  shape([{ x: cx - hw, y: cy - hh }, { x: cx + hw, y: cy - hh }, { x: cx + hw, y: cy + hh }, { x: cx - hw, y: cy + hh }], '#f3e3bc', 4);
+  for (const s of [-1, 1]) { wpath([{ x: cx + s * hw - 22, y: cy - hh - 20 }, { x: cx + s * hw + 22, y: cy - hh - 20 }, { x: cx + s * hw + 22, y: cy + hh + 20 }, { x: cx + s * hw - 22, y: cy + hh + 20 }], 1, true); ctx.fillStyle = '#d9b77a'; ctx.fill(); ink(4); }
+  if (open > .5) {
+    ctx.save(); ctx.beginPath(); ctx.rect(cx - hw, cy - hh, hw * 2, hh * 2); ctx.clip();
+    txtHand('НОВЫЙ НАЛОГ', cx, cy - 110, 66, '#7d3c98', -.02, null);
+    const k = P(t, T.toilet - .05, T.toilet + .2);
+    if (k > 0) { ctx.save(); ctx.translate(cx, cy + 30); ctx.scale(eback(k), eback(k)); txtHand('НА ТУАЛЕТЫ!', 0, 0, 74, '#b23a2a', .03, null); ctx.restore();
+      // latrine bench doodle
+      const by = cy + 130; shape([{ x: cx - 150, y: by - 26 }, { x: cx + 150, y: by - 26 }, { x: cx + 150, y: by + 26 }, { x: cx - 150, y: by + 26 }], '#e6dcc4', 3.5);
+      for (const k2 of [-90, 0, 90]) { wpath(circ(cx + k2, by - 4, 18, 12, 1.4).map(p => ({ x: p.x, y: by - 4 + (p.y - by + 4) * .5 })), 1, true); ctx.fillStyle = '#4a3a2a'; ctx.fill(); ink(2.5); } }
+    ctx.restore();
+  }
+}
+function marks(x, y, s, t0, t1, t) { const k = win(t, t0, t1, .12, .2); if (k <= 0) return; ctx.save(); ctx.translate(x, y); ctx.scale(eback(Math.min(1, P(t, t0, t0 + .2))) * k, k); txtHand(s, 0, 0, 80, INK, .1); ctx.restore(); }
+
+// ---------- timeline ----------
+function scenePeople(t) {
+  // citizen A: holds amphora, drops it on "туалеты", then shuffles off left
+  const dropT = T.toilet + .1, leaveT = T.son - .2;
+  const ax = 170 - eo(P(t, leaveT, leaveT + 1.0)) * 360, walkA = t > leaveT && t < leaveT + 1 ? Math.sin(t * 14) * .3 : 0;
+  const shockA = P(t, T.toilet, T.toilet + .15);
+  const A = person({ t, x: ax, cloth: '#cbbf9f', legs: [walkA, -walkA], bob: Math.abs(walkA) * -8,
+    armL: shockA > 0 ? [lerp(.55, -2.6, shockA), lerp(1.4, -2.9, shockA)] : [.55, 1.4], armR: shockA > 0 ? [lerp(-.55, 2.6, shockA), lerp(-1.4, 2.9, shockA)] : [-.55, -1.4],
+    face: { lookX: t < T.tax ? .4 : .7, mouth: shockA > 0 ? 'o' : 'flat', shock: shockA, brow: shockA * .8, blink: (t % 3.3) > 3.2 } });
+  // amphora
+  if (t < dropT) amphora(ax + 2, 1182, 0);
+  else if (t < dropT + .45) { const k = P(t, dropT, dropT + .45); amphora(ax + 2 + k * 40, 1182 + k * k * 220, k * 2.2); }
+  else { const k = P(t, dropT + .45, dropT + 1.2); // shards
+    for (let i = 0; i < 6; i++) { const a = -2.6 + i * .45, d = eo(k) * (60 + hash(i) * 50), sx = ax + 42 + Math.cos(a) * d * 1.5, sy = 1410 + Math.sin(a) * d * .3 - Math.sin(k * Math.PI) * 40 * hash(i + 3);
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(i + k * 3); shape([{ x: -14, y: -8 }, { x: 12, y: -10 }, { x: 8, y: 10 }, { x: -10, y: 6 }], '#c8573a', 3); ctx.restore(); } }
+  marks(ax + 40, 820, '!', T.toilet, T.son, t);
+
+  // Titus: marches in on "сын", furious; sniffs the coin
+  const tIn = T.son, tx = lerp(-200, 285, eo(P(t, tIn, tIn + 1.1))), walkT = t > tIn && t < tIn + 1.1 ? Math.sin(t * 16) * .35 : 0;
+  const angry = win(t, T.rage - .3, T.vesp2 + .2, .3, .4), sniff = win(t, T.nose + .1, T.no + .2, .2, .2), shake = t > T.no && t < T.no + .7 ? Math.sin((t - T.no) * 28) * .12 : 0;
+  const shout = talking(t, T.rage - .2, T.shame + .5);
+  const Ti = person({ t, x: tx, cloth: '#c23b30', belt: '#e2b23a', hair: true, legs: [walkT, -walkT], bob: Math.abs(walkT) * -8, lean: sniff * .55, tilt: shake + sniff * .12,
+    armL: angry > 0 ? [lerp(-.15, -2.5 + Math.sin(t * 9) * .3, angry), lerp(-.05, -3.0, angry)] : [-.15, -.05],
+    armR: angry > 0 ? [lerp(.15, 2.5 + Math.sin(t * 9 + 1) * .3, angry), lerp(.05, 3.0, angry)] : t > T.money2 ? [.9, 2.3] : [.15, .05],
+    red: angry, face: { lookX: .7, brow: angry ? -1 : (t > T.smell ? .6 : 0), mouth: shout > 0 ? 'shout' : sniff > .5 ? 'flat' : t > T.money2 ? 'wavy' : 'frown', talk: shout, closed: sniff > .6 && t < T.smell, nose: sniff > .3, blush: angry > .5 } });
+  if (angry > .5) for (let i = 0; i < 2; i++) { const a = (t * 1.2 + i * .5) % 1; wpath(circ(Ti.head.x + (i ? 60 : -60) + a * (i ? 30 : -30), Ti.head.y - 110 - a * 80, 14 + a * 16, 10), 1.5, true); ctx.fillStyle = `rgba(255,255,255,${1 - a})`; ctx.fill(); ink(3, `rgba(43,38,34,${1 - a})`); }
+  marks(Ti.head.x + 10, Ti.head.y - 160, '?', T.smell + .2, T.exactly, t);
+
+  // Vespasian behind the podium
+  const turn = win(t, T.vesp2 - .2, TOTAL + 1, .4, .1), offer = win(t, T.nose - .3, T.exactly + .3, .35, .3);
+  const vTalk = talking(t, WT('спрашива', 1, 14.4) + .5, T.smell + .45) + talking(t, T.no, T.no + .4) + talking(t, T.exactly, T.end);
+  const V = person({ t, x: 500, cloth: '#efe6cc', toga: true, wreath: true, sandals: true,
+    armL: offer > 0 ? [lerp(-.3, -2.0, offer), lerp(.6, -2.6, offer)] : [-.25 - Math.sin(t * 2.2) * .15 * (t < T.son ? 1 : 0), .7],
+    armR: t > T.exactly && t < T.money2 + .3 ? [2.4, 3.0] : [.7 + Math.sin(t * 3) * .06, 1.9],
+    face: { lookX: lerp(.2, -.9, turn), mouth: vTalk > 0 ? 'flat' : t > T.exactly ? 'smug' : t > T.tax && t < T.son ? 'smile' : 'wavy', talk: vTalk, brow: t > T.smell && t < T.exactly ? 1 : .4, wrinkles: true, blink: (t % 4.2) > 4.1 } });
+  if (offer > .2) coin(V.hL.x - 6, V.hL.y - 10, 22);
+  // sniff lines from the coin into Titus' nose
+  if (sniff > .3 && t < T.smell + .3) for (let i = 0; i < 3; i++) { const a = (t * 2 + i / 3) % 1, x0 = V.hL.x - 30, x1 = Ti.head.x + 40;
+    wline([{ x: lerp(x0, x1, a), y: V.hL.y - 30 + i * 14 }, { x: lerp(x0, x1, a) - 18, y: V.hL.y - 38 + i * 14 }, { x: lerp(x0, x1, a) - 36, y: V.hL.y - 30 + i * 14 }], 2.5, 'rgba(43,38,34,.55)'); }
+  podium();
+  // citizen B by the fire with the coin pile
+  const shockB = win(t, T.toilet, T.son + .5, .15, .4), happy = P(t, T.money2, T.money2 + .3);
+  person({ t, x: 900, cloth: '#7a5636', belt: '#5a3c22', armL: [-.25, -.15], armR: shockB > 0 ? [lerp(1.2, 2.6, shockB), lerp(1.55, 3.0, shockB)] : [1.2 + Math.sin(t * 2) * .05, 1.55],
+    face: { lookX: shockB > 0 ? -.8 : .5, mouth: shockB > .3 ? 'o' : happy > 0 ? 'smile' : 'frown', shock: shockB, brow: shockB, blink: (t % 3.7) > 3.6 } });
+  marks(960, 860, '?!', T.toilet + .1, T.son + .4, t);
+}
+
+function draw(t) {
+  sid = 0; boil = Math.floor(t * 10);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // camera: push in on the coin moment, back out for the finale
+  const z = 1 + .22 * win(t, T.vesp2 - .3, T.money2 + .4, .9, .7), cx = 420, cy = 1100;
+  ctx.setTransform(z, 0, 0, z, cx - cx * z, cy - cy * z);
+  background(t);
+  fire(t, 1010, 1420);
+  coinPile(t, 1010, 1440 - 4, P(t, T.money2, T.end));
+  scenePeople(t);
+  // falling coins at the finale
+  if (t > T.money2) for (let i = 0; i < 16; i++) { const k = t - T.money2 - hash(i) * 1.4; if (k < 0) continue; const y = -60 + k * k * 900, x = 80 + hash(i + 9) * 920; if (y < 1500) coin(x, y, 18 + hash(i) * 8); }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  scroll(t);
+  // titles
+  const k0 = win(t, .5, T.money - .2, .3, .3); if (k0 > 0) { ctx.save(); ctx.globalAlpha = k0; txtHand('ДРЕВНИЙ РИМ', W / 2, 330 - (1 - k0) * 30, 96, '#7d3c98', -.02); txtHand('70 год н. э.', W / 2, 430, 46, INK, .01); ctx.restore(); }
+  const k1 = P(t, T.money2, T.money2 + .3); if (k1 > 0) { ctx.save(); ctx.translate(W / 2, 400); const s = eback(k1); ctx.scale(s, s); txtHand('PECUNIA', 0, -60, 110, '#b8860b', -.03); txtHand('NON OLET', 0, 60, 110, '#b8860b', .02); ctx.restore(); }
+  // captions
+  const gr = GROUPS.find(q => t >= q.t0 && t < q.end);
+  if (gr) { const k = eback(P(t, gr.t0, gr.t0 + .16)), s = gr.words.join(' ').toUpperCase(); ctx.save(); ctx.translate(W / 2, 1700); ctx.font = '900 70px Inter'; const fit = Math.min(1, 960 / ctx.measureText(s).width); ctx.scale(k * fit, k * fit);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = 16; ctx.strokeStyle = '#000'; ctx.strokeText(s, 0, 0); ctx.fillStyle = '#fff'; ctx.fillText(s, 0, 0); ctx.restore(); }
+  // paper grain (multiply) + fades
+  ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(tex, 0, 0); ctx.restore();
+  const fade = Math.max(1 - P(t, 0, .4), P(t, TOTAL - .6, TOTAL)); if (fade > 0) { ctx.fillStyle = `rgba(247,241,227,${fade})`; ctx.fillRect(0, 0, W, H); }
+}
+
+const SFX = [[T.tax - .2, 'scroll', .7], [T.toilet, 'boop', .6], [T.toilet + .55, 'shatter', .9], [T.toilet + .1, 'gasp', .5],
+  [T.son, 'step', .5], [T.son + .3, 'step', .5], [T.son + .6, 'step', .5], [T.son + .9, 'step', .5], [T.son - .3, 'scroll', .4],
+  [T.nose + .3, 'sniff', .9], [T.smell + .3, 'hmm', .5], [T.no, 'swish', .4], [T.exactly, 'ding', .4], [T.money2, 'coins', 1], [T.money2 + .5, 'coins', .7]];
+window.frameJPEG = t => { draw(t); return cv.toDataURL('image/jpeg', .92); };
+window.META = { TOTAL, SFX, MUSIC: 'rome', VO };
+window.READY = document.fonts.load('900 70px Inter');
+if (!location.search.includes('render')) { const s = performance.now(); const loop = n => { draw(((n - s) / 1000) % TOTAL); requestAnimationFrame(loop); }; window.READY.then(() => requestAnimationFrame(loop)); }
+</script></body></html>

@@ -75,6 +75,35 @@ def fx(n):
     if n == 'lamp': return mixp(lowpass(noise(.5), 1200) * env(.5, .02, .15) * 1.4, sweep(90, 60, .4) * env(.4, .02, .1) * .5)
     if n == 'bell':
         t = T(4.0); return sum(np.sin(2 * np.pi * f * t) * a * np.exp(-t * dcy) for f, a, dcy in [(196, .5, .6), (392.5, .35, .9), (466, .2, 1.2), (587, .15, 1.6), (784, .1, 2.2)]) * .5
+    if n == 'honk':
+        t = T(.5); x = np.sign(np.sin(2 * np.pi * 330 * t)) * .5 + np.sign(np.sin(2 * np.pi * 415 * t)) * .5
+        x = lowpass(x, 1800) * np.minimum(1, t / .02) * np.clip((.5 - t) / .05, 0, 1)
+        return np.concatenate([x[:int(.22 * SR)], np.zeros(int(.06 * SR)), x]) * .35
+    if n == 'paper':
+        d = .45; t = T(d); return lowpass(noise(d), 5000) * (np.abs(np.sin(2 * np.pi * 11 * t)) ** 2) * np.sin(np.pi * t / d) * 1.2
+    if n == 'sip': return lowpass(noise(.25), 1500) * np.sin(np.pi * T(.25) / .25) * .6
+    if n == 'pigeon':
+        t = T(.7); f = 420 + 60 * np.sin(np.pi * t / .7); return np.sin(2 * np.pi * np.cumsum(f) / SR) * np.sin(np.pi * t / .7) ** 2 * (1 + .5 * np.sin(2 * np.pi * 18 * t)) * .15
+    if n == 'shatter':
+        x = mixp(lowpass(noise(.5), 7000) * env(.5, .001, .08) * 1.6, sweep(220, 70, .2) * env(.2, .001, .05))
+        for k in range(8):
+            p = np.sin(2 * np.pi * (1500 + 900 * rng.random()) * T(.08)) * env(.08, .001, .02) * .3; o = int((.03 + k * .04) * SR); x[o:o + len(p)] += p
+        return x
+    if n == 'sniff':
+        x = np.zeros(int(.6 * SR))
+        for k in range(2):
+            p = lowpass(noise(.14), 3000) * np.sin(np.pi * T(.14) / .14) * .9; o = int(k * .22 * SR); x[o:o + len(p)] += p
+        return x
+    if n == 'coins':
+        x = np.zeros(int(1.4 * SR))
+        for k in range(14):
+            f = 2500 + 2500 * rng.random(); p = (np.sin(2 * np.pi * f * T(.25)) + .5 * np.sin(2 * np.pi * f * 1.5 * T(.25))) * env(.25, .001, .05) * .18
+            o = int(rng.random() * 1.1 * SR); x[o:o + len(p)] += p
+        return x
+    if n == 'scroll': return lowpass(noise(.5), 2500) * np.sin(np.pi * T(.5) / .5) * .8 + 0
+    if n == 'gasp':
+        t = T(.35); return lowpass(noise(.35), 2200) * np.sin(np.pi * t / .35) ** 2 * .9
+    if n == 'drum': return mixp(sweep(110, 55, .3) * env(.3, .002, .09) * 1.2, lowpass(noise(.05), 1500) * env(.05, .001, .01))
     raise ValueError(n)
 
 
@@ -122,9 +151,53 @@ for t, n, v in meta['SFX']:
     x = fx(n) * v; o = int(t * SR)
     if o >= N: continue
     ev[o:o + len(x)] += x[:N - o]
-mus = {'uke': music_uke, 'city': music_city}[meta.get('MUSIC', 'uke')]()
+def reed(f, d):  # accordion-like reed: detuned saws + tremolo
+    t = T(d); x = sum((2 * ((f * k * t) % 1) - 1) * .5 for k in (1, 1.004, 2.002)) * (1 + .18 * np.sin(2 * np.pi * 6 * t))
+    return lowpass(x, 2400) * np.minimum(1, t / .03) * np.clip((d - t) / .06, 0, 1)
+
+
+def music_paris():  # musette waltz, A minor
+    out = np.zeros(N); bpm = 168; beat = 60 / bpm
+    prog = [(110.0, [220.0, 261.6, 329.6]), (82.4, [207.7, 246.9, 293.7]), (110.0, [220.0, 261.6, 329.6]), (146.8, [220.0, 293.7, 349.2])]
+    mel = [659.3, 587.3, 523.3, 493.9, 523.3, 587.3, 659.3, 0, 784.0, 698.5, 659.3, 0, 587.3, 523.3, 493.9, 440.0]
+    t = .3; i = 0
+    while t < TOTAL - .6:
+        bass, ch = prog[(i // 6) % 4]
+        if i % 3 == 0: x = reed(bass, beat * .9) * .06
+        else: x = sum(reed(f, beat * .6) for f in ch) * .025
+        o = int(t * SR); out[o:o + len(x)] += x[:N - o]
+        if i % 3 == 0:
+            f = mel[(i // 3) % len(mel)]
+            if f: m = reed(f, beat * 2.6) * .045; out[o:o + len(m)] += m[:N - o]
+        t += beat; i += 1
+    return out
+
+
+def music_rome():  # lyre arpeggios + frame drum
+    out = np.zeros(N); beat = .36
+    chords = [[146.8, 220.0, 293.7, 349.2], [130.8, 196.0, 261.6, 329.6], [116.5, 174.6, 233.1, 293.7], [130.8, 196.0, 261.6, 311.1]]
+    t = .2; i = 0
+    while t < TOTAL - .6:
+        ch = chords[(i // 8) % 4]; f = ch[[0, 2, 1, 3, 2, 1, 3, 2][i % 8]] * 2
+        p = pluck(f, 1.2, 1.2) * .07; o = int(t * SR); out[o:o + len(p)] += p[:N - o]
+        if i % 4 == 0: d = fx('drum') * .25; out[o:o + len(d)] += d[:N - o]
+        t += beat; i += 1
+    return out
+
+
+mus = {'uke': music_uke, 'city': music_city, 'paris': music_paris, 'rome': music_rome}[meta.get('MUSIC', 'uke')]()
+# голос за кадром (voice_<name>.wav) + приглушение музыки под голосом
+vo = np.zeros(N)
+try:
+    with wave.open(f'voice_{name}.wav') as w:
+        v = np.frombuffer(w.readframes(w.getnframes()), '<i2').astype(float) / 32768
+    o = int(meta.get('VO', 0) * SR); vo[o:o + len(v)] += v[:N - o]
+    e = np.convolve(np.abs(vo), np.ones(SR // 10) / (SR // 10), 'same')
+    mus *= 1 - .6 * np.clip(e * 12, 0, 1)
+except FileNotFoundError:
+    pass
 fade = np.minimum(1, np.arange(N) / (SR * .5)) * np.clip((TOTAL - np.arange(N) / SR) / 1.0, 0, 1)
-mix = (ev * .8 + mus) * fade
+mix = (ev * .8 + mus + vo * 1.5) * fade
 mix = np.tanh(mix * 1.1) * .9
 st = np.stack([mix, mix], 1)
 with wave.open(f'{name}_mix.wav', 'wb') as w:

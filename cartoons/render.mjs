@@ -6,7 +6,13 @@ const [name, mode = 'video', ...rest] = process.argv.slice(2);
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' }).catch(() => chromium.launch());
 const page = await browser.newPage({ viewport: { width: 1080, height: 1920 } });
 page.on('pageerror', e => console.log('ERR', e.message)); page.on('console', m => console.log('console:', m.text()));
-await page.goto('file://' + process.cwd() + `/${name}.html?render`);
+// тайминги слов озвучки (если есть) подставляются в страницу вместо /*WORDS*/null
+let page_file = `${name}.html`;
+if (fs.existsSync(`${name}_words.json`)) {
+  page_file = `${name}.build.html`;
+  fs.writeFileSync(page_file, fs.readFileSync(`${name}.html`, 'utf8').replace('/*WORDS*/null', fs.readFileSync(`${name}_words.json`, 'utf8')));
+}
+await page.goto('file://' + process.cwd() + `/${page_file}?render`);
 await page.evaluate(() => window.READY);
 const meta = await page.evaluate(() => JSON.parse(JSON.stringify(window.META)));
 fs.writeFileSync(`${name}_meta.json`, JSON.stringify(meta));

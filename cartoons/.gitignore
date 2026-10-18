@@ -3,3 +3,5 @@ prev/
 *_meta.json
 *_video.mp4
 *_mix.wav
+*.build.html
+voice_*.mp3
