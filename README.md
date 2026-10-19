@@ -28,3 +28,16 @@ pip install numpy
 ```
 
 Нужны `ffmpeg`, Node.js с Playwright и Chromium.
+
+## Мультики (`cartoons/`)
+
+Ролики-мультики, нарисованные кодом, с озвучкой ElevenLabs: стикмен, «Золотой час», «Париж» (Люстиг), «Рим» (дудл).
+Скилл для Claude Code: `.claude/skills/cartoon-video/` (режиссура, стили, конвейер, проверка).
+
+```bash
+cd cartoons
+./make.sh rome            # вертикально 1080×1920 → rome.mp4
+FMT=h ./make.sh myscene   # горизонтально 1920×1080 → myscene_h.mp4
+./review.sh rome.mp4      # контактные листы, параметры, громкость
+```
+Новая сцена начинается с копии `cartoons/template.html`.

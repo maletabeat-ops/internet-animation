@@ -198,7 +198,7 @@ except FileNotFoundError:
     pass
 fade = np.minimum(1, np.arange(N) / (SR * .5)) * np.clip((TOTAL - np.arange(N) / SR) / 1.0, 0, 1)
 mix = (ev * .8 + mus + vo * 1.5) * fade
-mix = np.tanh(mix * 1.1) * .9
+mix = np.tanh(mix * 1.1) * .8  # запас под пересэмплинг AAC: пик ниже -1 dBTP
 st = np.stack([mix, mix], 1)
 with wave.open(f'{name}_mix.wav', 'wb') as w:
     w.setnchannels(2); w.setsampwidth(2); w.setframerate(SR); w.writeframes((st * 32767).astype('<i2').tobytes())
