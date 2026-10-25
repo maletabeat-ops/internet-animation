@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Трещина</title>
+<style>html,body{margin:0;background:#111;overflow:hidden}canvas{display:block;width:100vw;height:100vh;object-fit:contain}</style>
+<script src="crack_assets.js"></script>
+</head><body><canvas id="c"></canvas>
+<script>
+// «Трещина»: утопия, робот B-7 и Мия. Персонажи — вырезки из картинок пользователя (assets/crack_*),
+// мир, глаза-экраны робота, нить, сканеры и свет рисуются кодом. Только вертикаль.
+const FMT = 'v';
+const W = 1080, H = 1920, U = 1;
+const cv = document.getElementById('c'); cv.width = W; cv.height = H; const ctx = cv.getContext('2d');
+const VO = .6;
+const WD = /*WORDS*/null || { dur: 27.35, words: [] };
+const TOTAL = VO + WD.dur + 1.8;
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const P = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, k) => a + (b - a) * k;
+const ss = k => k * k * (3 - 2 * k);
+const eo = k => 1 - Math.pow(1 - k, 3);
+const eio = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const eback = k => { const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };
+const hash = n => { n = Math.sin(n * 127.1 + 311.7) * 43758.5453; return n - Math.floor(n); };
+const win = (t, a, b, fi = .2, fo = .2) => clamp(Math.min(P(t, a, a + fi), 1 - P(t, b - fo, b)));
+
+// ---------- озвучка ----------
+const WORDS = WD.words.map(w => ({ ...w, t0: w.t0 + VO, t1: w.t1 + VO }));
+function WX(word, fb = 0) { const w = WORDS.find(w => w.w.toLowerCase().replace(/[^а-яёa-z-]/g, '') === word); return w ? w.t0 : fb; }
+function WT(sub, nth = 1, fb = 0) { let k = 0; for (const w of WORDS) if (w.w.toLowerCase().includes(sub)) { if (++k === nth) return w.t0; } return fb; }
+const GROUPS = []; { let g = null;
+  WORDS.filter(w => w.w !== '—').forEach((w, i, A) => { const prev = A[i - 1];
+    if (!g || g.words.length >= 3 || /[.,!?:…]$/.test(prev.w) || w.t0 - prev.t1 > .35) { g = { words: [], t0: w.t0 }; GROUPS.push(g); }
+    g.words.push(w.w.replace(/\.\.\./, '').replace(/[.,:…]+$/, '')); g.t1 = w.t1; });
+  GROUPS.forEach((g, i) => { g.end = i + 1 < GROUPS.length ? Math.min(GROUPS[i + 1].t0, g.t1 + .6) : g.t1 + .8; }); }
+function captions(t) {
+  const gr = GROUPS.find(q => t >= q.t0 && t < q.end); if (!gr) return;
+  const s = gr.words.join(' ').toUpperCase(), k = eback(P(t, gr.t0, gr.t0 + .16)), size = 70;
+  ctx.save(); ctx.translate(W / 2, H * .86); ctx.font = `900 ${size}px Inter`;
+  const fit = Math.min(1, W * .88 / ctx.measureText(s).width); ctx.scale(k * fit, k * fit);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.lineWidth = size * .23; ctx.strokeStyle = '#000'; ctx.strokeText(s, 0, 0);
+  ctx.fillStyle = '#fff'; ctx.fillText(s, 0, 0); ctx.restore();
+}
+
+// ---------- ключевые моменты (по словам озвучки) ----------
+const T = {};
+function initTimes() {
+  T.crack = WT('трещины', 1, 3.85); T.except = WT('кроме', 1, 4.6); T.robot = WT('маленький', 1, 5.9);
+  T.b7 = WT('би-семь', 1, 6.7); T.cracked = WT('треснул', 1, 7.1); T.sys = WT('система', 1, 7.9); T.verdict = WT('приговор', 1, 8.8);
+  T.util = WT('утилизация', 1, 9.46); T.but = WX('но', 10.85); T.mia = WT('мия', 1, 11.75); T.red = WT('красная', 1, 12.9);
+  T.only = WT('единственная', 1, 13.9); T.city = WT('городе', 3, 16.1); T.she = WX('она', 17.0); T.tied = WT('завязала', 1, 17.3);
+  T.hand = WT('руке', 1, 18.3); T.sys2 = WT('система', 2, 19.06); T.not = WT('нашла', 1, 21.5); T.because = WT('потому', 1, 22.8);
+  T.own = WT('свой', 1, 27.3); T.title = T.own + .55;
+}
+initTimes();
+
+// ---------- камера ----------
+function camAt(keys, t) { let i = 0; while (i < keys.length - 2 && t > keys[i + 1][0]) i++; const a = keys[i], b = keys[i + 1], k = eio(P(t, a[0], b[0]));
+  return { x: lerp(a[1], b[1], k), y: lerp(a[2], b[2], k), z: lerp(a[3], b[3], k), r: lerp(a[4], b[4], k) }; }
+function layer(c, depth, fn) {
+  const z = 1 + (c.z - 1) * depth, x = W / 2 + (c.x - W / 2) * depth, y = H / 2 + (c.y - H / 2) * depth;
+  ctx.save(); ctx.translate(W / 2, H / 2); ctx.rotate(c.r * depth); ctx.scale(z, z); ctx.translate(-x, -y); fn(); ctx.restore();
+}
+
+// ---------- картинки ----------
+const IMG = {};
+const loadImgs = Promise.all(Object.entries(window.IMG_SRC).map(([k, src]) => new Promise(r => { const im = new Image(); im.onload = () => { IMG[k] = im; r(); }; im.src = src; })));
+
+// ---------- город-утопия ----------
+const PAL = {
+  day: { sky: ['#bfe3ff', '#e8f6ff', '#fff6ea'], sun: 'rgba(255,248,225,', far: '#dce9f2', mid: '#eef4f8', near: '#ffffff', glass: 'rgba(150,215,240,.55)', green: ['#9fdcb8', '#6cc49a'], haze: 'rgba(235,246,255,' },
+  dusk: { sky: ['#6f86c9', '#f3a98b', '#ffd9a3'], sun: 'rgba(255,214,150,', far: '#b9a7c8', mid: '#e6c9c4', near: '#fff0e2', glass: 'rgba(255,200,150,.55)', green: ['#9cc59a', '#6d9f74'], haze: 'rgba(255,214,180,' },
+};
+function tower(x, base, w, h, col, glass, green, seed, lit) {
+  const r = w / 2, kind = Math.floor(hash(seed * 3.1) * 3), top = base - h, tw = r * (kind === 1 ? .55 : .8);
+  // силуэт: сужение кверху, скруглённая или купольная вершина
+  ctx.beginPath(); ctx.moveTo(x - r, base + 400); ctx.lineTo(x - r, top + h * .35);
+  ctx.bezierCurveTo(x - r, top + h * .12, x - tw, top + r, x - tw, top + tw);
+  ctx.arc(x, top + tw, tw, Math.PI, 0); ctx.lineTo(x + tw, top + tw);
+  ctx.bezierCurveTo(x + tw, top + r, x + r, top + h * .12, x + r, top + h * .35); ctx.lineTo(x + r, base + 400); ctx.closePath();
+  ctx.fillStyle = col; ctx.fill();
+  const g = ctx.createLinearGradient(x - r, 0, x + r, 0); g.addColorStop(0, 'rgba(255,255,255,.55)'); g.addColorStop(.35, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(90,110,150,.28)');
+  ctx.fillStyle = g; ctx.fill();
+  ctx.save(); ctx.clip();
+  // стеклянная лента-спираль вместо полосок
+  ctx.fillStyle = glass;
+  if (kind === 0) for (let i = 0; i < 9; i++) { const y = top + tw + i * h / 9; ctx.beginPath(); ctx.ellipse(x, y, r * 1.1, w * .05, -.12, 0, 7); ctx.fill(); }
+  else if (kind === 1) { ctx.fillRect(x - r * .18, top, r * .36, h + 400); }
+  else for (let i = 0; i < 5; i++) ctx.fillRect(x - r + i * w / 5 + w * .06, top + tw * 1.4, w * .06, h + 400);
+  if (lit > 0) { ctx.fillStyle = `rgba(255,214,140,${lit * .8})`; for (let i = 0; i < 14; i++) if (hash(seed * 7 + i) > .45) ctx.fillRect(x - r * .7 + hash(seed + i * 3) * r * 1.2, top + tw * 2 + hash(seed * 5 + i) * h * .8, w * .07, w * .1); }
+  ctx.restore();
+  // висячие сады: несколько крупных кустов с каскадом
+  for (let i = 0; i < 2; i++) {
+    const y = top + h * (.32 + .3 * i + hash(seed + i) * .1), sx = (hash(seed + i * 4) > .5 ? 1 : -1);
+    ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.ellipse(x, y + w * .04, r * 1.12, w * .06, 0, 0, 7); ctx.fill();
+    for (let k = 0; k < 5; k++) { const bx = x + (k - 2) * r * .42, br = w * (.09 + .05 * hash(seed + i * 9 + k));
+      ctx.fillStyle = green[1]; ctx.beginPath(); ctx.arc(bx, y - br * .3, br, 0, 7); ctx.fill();
+      ctx.fillStyle = green[0]; ctx.beginPath(); ctx.arc(bx - br * .25, y - br * .55, br * .65, 0, 7); ctx.fill(); }
+    ctx.strokeStyle = green[1]; ctx.lineWidth = Math.max(2, w * .025); ctx.lineCap = 'round';
+    for (let k = 0; k < 4; k++) { const vx = x + sx * r * (.6 + .12 * k); ctx.beginPath(); ctx.moveTo(vx, y); ctx.quadraticCurveTo(vx + sx * w * .05, y + w * .2, vx, y + w * (.25 + .2 * hash(seed + k))); ctx.stroke(); }
+  }
+  ctx.strokeStyle = col; ctx.lineWidth = Math.max(2, w * .035); ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top - w * .5); ctx.stroke();
+}
+function cityLayers(c, t, pal, lit = 0, sunY = .38) {
+  layer(c, .05, () => {
+    const g = ctx.createLinearGradient(0, -H, 0, H * 1.3); g.addColorStop(0, pal.sky[0]); g.addColorStop(.6, pal.sky[1]); g.addColorStop(1, pal.sky[2]);
+    ctx.fillStyle = g; ctx.fillRect(-W * 2, -H * 2, W * 5, H * 5);
+    const sx = W * .7, sy = H * sunY; const s = ctx.createRadialGradient(sx, sy, 0, sx, sy, 700);
+    s.addColorStop(0, pal.sun + '1)'); s.addColorStop(.12, pal.sun + '.9)'); s.addColorStop(.4, pal.sun + '.25)'); s.addColorStop(1, pal.sun + '0)');
+    ctx.fillStyle = s; ctx.fillRect(sx - 700, sy - 700, 1400, 1400);
+    for (let i = 0; i < 7; i++) { // soft clouds
+      const cx = ((i * 420 + t * 14) % 3000) - 900, cy = -300 + i * 140;
+      ctx.fillStyle = 'rgba(255,255,255,.45)'; for (let k = 0; k < 4; k++) { ctx.beginPath(); ctx.ellipse(cx + k * 90, cy + Math.sin(k) * 20, 140, 46, 0, 0, 7); ctx.fill(); }
+    }
+  });
+  layer(c, .25, () => { for (let i = -6; i < 16; i++) tower(i * 150 + 40 * hash(i), H * .64, 70 + 30 * hash(i + 3), 500 + 420 * hash(i + 9), pal.far, pal.glass, pal.green, i, lit * .6);
+    ctx.fillStyle = pal.haze + '.55)'; ctx.fillRect(-W * 2, H * .5, W * 5, H); });
+  layer(c, .45, () => {
+    for (let i = -4; i < 10; i++) tower(i * 260 + 90 * hash(i + 20), H * .74, 110 + 50 * hash(i + 21), 700 + 500 * hash(i + 22), pal.mid, pal.glass, pal.green, i + 50, lit * .8);
+    // floating ring-bridge + monorail pods
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(-W, H * .47); ctx.quadraticCurveTo(W * .5, H * .40, W * 2, H * .47); ctx.stroke();
+    for (let k = 0; k < 4; k++) { const u = ((t * .06 + k * .25) % 1), x = lerp(-W, W * 2, u), y = H * .47 - Math.sin(u * Math.PI) * H * .035;
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.roundRect(x - 50, y - 26, 100, 30, 15); ctx.fill(); ctx.fillStyle = pal.glass; ctx.fillRect(x - 36, y - 20, 72, 10); }
+    ctx.fillStyle = pal.haze + '.35)'; ctx.fillRect(-W * 2, H * .6, W * 5, H);
+  });
+  layer(c, .7, () => {
+    for (let i = -3; i < 6; i++) tower(i * 430 + 150 * hash(i + 40), H * .9, 170 + 60 * hash(i + 41), 900 + 600 * hash(i + 42), pal.near, pal.glass, pal.green, i + 90, lit);
+    // drones
+    for (let k = 0; k < 6; k++) { const x = (k * 300 + t * (40 + k * 12)) % 2400 - 600, y = H * (.3 + .06 * k) + Math.sin(t * 2 + k) * 14;
+      ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.ellipse(x, y, 16, 6, 0, 0, 7); ctx.fill(); ctx.fillStyle = 'rgba(120,230,255,.9)'; ctx.beginPath(); ctx.arc(x, y + 3, 3, 0, 7); ctx.fill(); }
+  });
+  // birds
+  layer(c, .35, () => { ctx.strokeStyle = 'rgba(70,90,120,.5)'; ctx.lineWidth = 3; for (let k = 0; k < 5; k++) { const x = (t * 60 + k * 70) % 2000 - 400, y = H * .2 + k * 30 + Math.sin(k * 3) * 30, f = Math.sin(t * 9 + k) * 8;
+    ctx.beginPath(); ctx.moveTo(x - 14, y - f); ctx.quadraticCurveTo(x - 6, y - 6, x, y); ctx.quadraticCurveTo(x + 6, y - 6, x + 14, y - f); ctx.stroke(); } });
+}
+
+// ---------- коридор ----------
+function corridor(c, t, alarm, depth = .5) {
+  layer(c, depth, () => {
+    const vx = W / 2, vy = H * .42;
+    ctx.fillStyle = '#e9edf1'; ctx.fillRect(-W, -H, W * 3, H * 3);
+    // walls/ceiling/floor as perspective trapezoids
+    const R = 2600;
+    const quad = (pts, col) => { ctx.fillStyle = col; ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath(); ctx.fill(); };
+    const bw = 300, bh = 420; // back wall
+    quad([[vx - R, vy - R * 1.1], [vx + R, vy - R * 1.1], [vx + bw, vy - bh], [vx - bw, vy - bh]], '#f4f6f8');
+    quad([[vx - R, vy + R * 1.1], [vx + R, vy + R * 1.1], [vx + bw, vy + bh], [vx - bw, vy + bh]], '#dfe5ea');
+    quad([[vx - R, vy - R * 1.1], [vx - bw, vy - bh], [vx - bw, vy + bh], [vx - R, vy + R * 1.1]], '#eef1f4');
+    quad([[vx + R, vy - R * 1.1], [vx + bw, vy - bh], [vx + bw, vy + bh], [vx + R, vy + R * 1.1]], '#e6eaee');
+    quad([[vx - bw, vy - bh], [vx + bw, vy - bh], [vx + bw, vy + bh], [vx - bw, vy + bh]], '#cfd6dd');
+    // ceiling light panels + wall seams, receding
+    for (let i = 0; i < 7; i++) {
+      const k = Math.pow(.62, i), k2 = Math.pow(.62, i + .55);
+      const L = (kk, sx, sy) => [vx + sx * kk * R * .9 + (1 - kk) * 0, vy + sy * kk * R * 1.0];
+      ctx.fillStyle = alarm > 0 ? `rgba(255,${250 - alarm * 180},${250 - alarm * 180},.95)` : 'rgba(255,255,255,.98)';
+      const a = L(k, -.25, -1), b = L(k, .25, -1), cc = L(k2, .25, -1), d = L(k2, -.25, -1);
+      ctx.beginPath(); ctx.moveTo(a[0], Math.max(a[1], vy - R)); ctx.lineTo(b[0], Math.max(b[1], vy - R)); ctx.lineTo(cc[0], cc[1]); ctx.lineTo(d[0], d[1]); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(150,165,180,.35)'; ctx.lineWidth = 3;
+      for (const sx of [-1, 1]) { const p = [vx + sx * k * R, vy - k * R * 1.1], q = [vx + sx * k * R, vy + k * R * 1.1]; const pp = [vx + sx * Math.max(bw, k * R), vy - Math.max(bh, k * R * 1.1)], qq = [vx + sx * Math.max(bw, k * R), vy + Math.max(bh, k * R * 1.1)];
+        ctx.beginPath(); ctx.moveTo(pp[0], pp[1]); ctx.lineTo(qq[0], qq[1]); ctx.stroke(); }
+    }
+    // floor reflection streaks
+    const fg = ctx.createLinearGradient(0, vy + bh, 0, H * 1.5); fg.addColorStop(0, 'rgba(255,255,255,.0)'); fg.addColorStop(1, 'rgba(255,255,255,.45)');
+    ctx.fillStyle = fg; ctx.beginPath(); ctx.moveTo(vx - 120, vy + bh); ctx.lineTo(vx + 120, vy + bh); ctx.lineTo(vx + 700, H * 1.6); ctx.lineTo(vx - 700, H * 1.6); ctx.fill();
+    // security cameras on walls
+    for (const [sx, k] of [[-1, .55], [1, .55], [-1, .3], [1, .3]]) {
+      const x = vx + sx * k * R * .78, y = vy - k * R * .62, s = k * 2.2;
+      ctx.save(); ctx.translate(x, y); ctx.scale(s * -sx, s);
+      ctx.fillStyle = '#d7dde3'; ctx.fillRect(-4, -40, 8, 40); ctx.fillStyle = '#f7f9fb'; ctx.beginPath(); ctx.roundRect(-70, -10, 90, 44, 14); ctx.fill();
+      ctx.fillStyle = '#1b2430'; ctx.beginPath(); ctx.arc(-66, 12, 14, 0, 7); ctx.fill();
+      ctx.shadowColor = alarm > .3 ? '#ff3344' : '#3aa0ff'; ctx.shadowBlur = 20; ctx.fillStyle = alarm > .3 ? '#ff4455' : '#4db2ff'; ctx.beginPath(); ctx.arc(-66, 12, 6 + (alarm > .3 ? 2 * Math.sin(t * 20) : 0), 0, 7); ctx.fill();
+      ctx.restore();
+    }
+  });
+}
+
+// подиум/парапет: верх на высоте top, ширина x0..x1
+function podium(x0, x1, top, alarm, style = 'lab') {
+  const g = ctx.createLinearGradient(0, top, 0, top + 900); g.addColorStop(0, style === 'lab' ? '#ffffff' : '#fff7ef'); g.addColorStop(1, style === 'lab' ? '#c9d2da' : '#e4c9b8');
+  ctx.fillStyle = 'rgba(0,0,0,.08)'; ctx.beginPath(); ctx.ellipse((x0 + x1) / 2, top + 6, (x1 - x0) / 2, 22, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = g; ctx.fillRect(x0, top, x1 - x0, 3000);
+  ctx.fillStyle = 'rgba(255,255,255,.95)'; ctx.fillRect(x0, top, x1 - x0, 10);
+  ctx.fillStyle = style === 'lab' ? 'rgba(120,200,235,.6)' : 'rgba(255,190,140,.5)'; ctx.fillRect(x0, top + 40, x1 - x0, 6);
+  if (alarm > 0) { // red hazard stripes of the recycling line
+    ctx.save(); ctx.beginPath(); ctx.rect(x0, top + 70, x1 - x0, 70); ctx.clip(); ctx.globalAlpha = alarm;
+    ctx.fillStyle = '#ff3b4a'; ctx.fillRect(x0, top + 70, x1 - x0, 70); ctx.fillStyle = '#fff';
+    for (let x = x0 - 80; x < x1 + 80; x += 60) { ctx.beginPath(); ctx.moveTo(x, top + 70); ctx.lineTo(x + 30, top + 70); ctx.lineTo(x - 10, top + 140); ctx.lineTo(x - 40, top + 140); ctx.fill(); }
+    ctx.restore();
+  }
+}
+
+// ---------- робот ----------
+// опорная точка вырезки — центр между ступнями (371, 980)
+const R_FOOT = [371, 980], R_EYES = { R: [414, 333, 37, 38, 0], L: [287, 391, 39, 30, -.28] }, R_WRIST = [538, 812], R_CRACK = [333, 452];
+const r2w = (rb, p) => [rb.x + (p[0] - R_FOOT[0]) * rb.s, rb.y + (p[1] - R_FOOT[1]) * rb.s]; // приблизительно (без покачивания)
+function robot(rb, t, expr, blink = 0, extra = {}) {
+  const im = IMG.robot; if (!im) return;
+  ctx.save(); ctx.translate(rb.x, rb.y + (extra.hop || 0));
+  ctx.rotate(Math.sin(t * 1.3) * .012 + (extra.tremble ? Math.sin(t * 47) * .006 : 0));
+  const br = 1 + .008 * Math.sin(t * 2.2), sq = extra.squash || 0;
+  ctx.scale(rb.s * (1 + sq * .08), rb.s * br * (1 - sq * .08));
+  ctx.fillStyle = 'rgba(0,0,0,.18)'; ctx.beginPath(); ctx.ellipse(0, 0, 170, 22, 0, 0, 7); ctx.fill();
+  ctx.translate(-R_FOOT[0], -R_FOOT[1]);
+  ctx.drawImage(im, 0, 0);
+  if (extra.tint) { ctx.globalCompositeOperation = 'source-atop'; ctx.fillStyle = extra.tint; ctx.fillRect(0, 0, im.width, im.height); ctx.globalCompositeOperation = 'source-over'; }
+  eyes(t, expr, blink);
+  if (extra.spark) spark(t, extra.spark);
+  if (extra.thread) wristKnot(t, extra.thread);
+  ctx.restore();
+}
+function eyes(t, expr, blink) {
+  if (expr === 'orig' && blink <= 0) return;
+  for (const side of ['L', 'R']) {
+    const [cx, cy, rx, ry, rot] = R_EYES[side];
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
+    const g = ctx.createRadialGradient(-rx * .3, -ry * .3, 2, 0, 0, rx * 1.1); g.addColorStop(0, '#16293a'); g.addColorStop(1, '#060b12');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, 0, rx, ry, 0, 0, 7); ctx.clip();
+    const open = 1 - blink, j = expr === 'scared' ? Math.sin(t * 40 + (side === 'L' ? 1 : 0)) * 2 : 0;
+    ctx.shadowColor = '#4ff0ff'; ctx.shadowBlur = 22; ctx.fillStyle = '#58f2ff'; ctx.strokeStyle = '#58f2ff';
+    ctx.save(); ctx.scale(1, Math.max(.08, open));
+    if (expr === 'happy') { ctx.lineWidth = rx * .32; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(0, ry * .35, rx * .5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); }
+    else if (expr === 'scared') { ctx.beginPath(); ctx.arc(j, j * .5, rx * .3, 0, 7); ctx.fill(); }
+    else if (expr === 'wide') { ctx.beginPath(); ctx.roundRect(-rx * .55, -ry * .62, rx * 1.1, ry * 1.24, rx * .4); ctx.fill(); }
+    else { // 'sad' / 'orig' during blink: brow-tilted shape
+      ctx.beginPath(); const tl = side === 'L' ? -.1 : .25;
+      ctx.moveTo(-rx * .55, -ry * .2 + tl * ry); ctx.lineTo(rx * .55, -ry * .2 - tl * ry); ctx.lineTo(rx * .5, ry * .55); ctx.quadraticCurveTo(0, ry * .75, -rx * .5, ry * .55); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+    ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,.18)'; for (let y = -ry; y < ry; y += 5) ctx.fillRect(-rx, y, rx * 2, 1.5); // пиксели экрана
+    ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.beginPath(); ctx.ellipse(-rx * .35, -ry * .45, rx * .35, ry * .18, -.4, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+}
+function spark(t, k) {
+  const [x, y] = R_CRACK; ctx.save(); ctx.globalAlpha = k; ctx.shadowColor = '#b26bff'; ctx.shadowBlur = 25; ctx.strokeStyle = '#e2c4ff'; ctx.lineWidth = 3;
+  const f = Math.floor(t * 24);
+  for (let i = 0; i < 4; i++) { ctx.beginPath(); let px = x, py = y; ctx.moveTo(px, py);
+    for (let s = 0; s < 4; s++) { px += (hash(f * 9 + i * 3 + s) - .5) * 40; py += (hash(f * 7 + i + s * 5) - .5) * 40; ctx.lineTo(px, py); } ctx.stroke(); }
+  ctx.restore();
+}
+function wristKnot(t, k) {
+  const [x, y] = R_WRIST; ctx.save(); ctx.globalAlpha = clamp(k * 2); ctx.strokeStyle = '#c4141f'; ctx.lineWidth = 5; ctx.shadowColor = '#ff2a3a'; ctx.shadowBlur = 12 * k;
+  for (let i = 0; i < 2; i++) { ctx.beginPath(); ctx.ellipse(x, y + i * 9, 21, 7, .15, 0, Math.PI * 2 * eo(clamp(k * 1.5 - i * .3))); ctx.stroke(); }
+  const sw = Math.sin(t * 3) * 4;
+  ctx.beginPath(); ctx.moveTo(x + 18, y + 6); ctx.quadraticCurveTo(x + 30, y + 30, x + 26 + sw, y + 56 * eo(k)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x + 18, y + 6); ctx.quadraticCurveTo(x + 34, y + 20, x + 40 + sw, y + 44 * eo(k)); ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- Мия (вырезка) ----------
+const G_WRIST = [292, 884];
+function girl(gb, t, extra = {}) {
+  const im = IMG.girl; if (!im) return;
+  ctx.save(); ctx.translate(gb.x, gb.y); ctx.rotate(Math.sin(t * 1.1 + 1) * .006); ctx.scale(gb.s, gb.s * (1 + .006 * Math.sin(t * 2 + .5)));
+  ctx.translate(-362, -1376); ctx.drawImage(im, 0, 0);
+  if (extra.tint) { ctx.globalCompositeOperation = 'source-atop'; ctx.fillStyle = extra.tint; ctx.fillRect(0, 0, im.width, im.height); ctx.globalCompositeOperation = 'source-over'; }
+  ctx.restore();
+}
+const g2w = (gb, p) => [gb.x + (p[0] - 362) * gb.s, gb.y + (p[1] - 1376) * gb.s];
+
+// красная нить между запястьями
+function thread(a, b, t, k, glow) {
+  if (k <= 0) return;
+  ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = '#c8101c'; ctx.lineWidth = 6; ctx.shadowColor = '#ff2b3b'; ctx.shadowBlur = 10 + glow * 30;
+  const N = 40, sag = 60 + 14 * Math.sin(t * 1.7);
+  ctx.beginPath();
+  for (let i = 0; i <= N * k; i++) { const u = i / N, x = lerp(a[0], b[0], u), y = lerp(a[1], b[1], u) + Math.sin(u * Math.PI) * sag + Math.sin(u * 9 + t * 3) * 3 * (1 - k * .5); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.stroke(); ctx.restore();
+}
+
+// ---------- HUD системы ----------
+function hud(lines, col, k, y = 330) {
+  if (k <= 0) return;
+  ctx.save(); ctx.globalAlpha = k; ctx.translate(W / 2, y); const s = lerp(.9, 1, eo(k)); ctx.scale(s, s);
+  ctx.fillStyle = 'rgba(8,14,24,.72)'; ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect(-400, -70, 800, 140, 20); ctx.fill(); ctx.stroke();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 16;
+  ctx.font = '700 30px Inter'; ctx.fillText(lines[0], 0, -26); ctx.font = '900 46px Inter'; ctx.fillText(lines[1], 0, 22);
+  ctx.restore();
+}
+function scanBeam(k, col, y0, y1) {
+  if (k <= 0 || k >= 1) return;
+  const y = lerp(y0, y1, ss(k));
+  ctx.save(); const g = ctx.createLinearGradient(0, y - 120, 0, y + 10); g.addColorStop(0, col + '00'); g.addColorStop(1, col + '66');
+  ctx.fillStyle = g; ctx.fillRect(-W, y - 120, W * 3, 130); ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 30; ctx.fillRect(-W, y - 3, W * 3, 6); ctx.restore();
+}
+
+// ---------- трещина на «стекле» мира ----------
+const CRACKS = (() => { const out = []; for (let i = 0; i < 9; i++) { let a = i / 9 * Math.PI * 2 + hash(i) * .5, x = 0, y = 0; const pts = [[0, 0]];
+  for (let s = 0; s < 7; s++) { a += (hash(i * 13 + s) - .5) * .7; const L = 60 + 120 * hash(i * 5 + s); x += Math.cos(a) * L; y += Math.sin(a) * L; pts.push([x, y]); } out.push(pts); } return out; })();
+function glassCrack(k, x0, y0) {
+  if (k <= 0) return;
+  ctx.save(); ctx.translate(x0, y0); ctx.lineJoin = 'round';
+  CRACKS.forEach((pts, i) => { const n = Math.floor((pts.length - 1) * clamp(k * (1.2 - i * .04))) + 1;
+    for (const [lw, col] of [[7, 'rgba(40,60,90,.25)'], [2.5, 'rgba(255,255,255,.95)']]) { ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath(); for (let j = 0; j < n; j++) j ? ctx.lineTo(pts[j][0], pts[j][1]) : ctx.moveTo(0, 0); ctx.stroke(); } });
+  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.arc(0, 0, 10 * k, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+// =================== ПЛАНЫ ===================
+function shot1(t) { // город-утопия
+  const c = camAt([[0, W / 2, H * .1, 1.05, 0], [T.crack - .2, W / 2, H * .5, 1.0, .0], [T.robot, W * .6, H * .45, 1.18, .015]], t);
+  cityLayers(c, t, PAL.day, 0, .3);
+  // лёгкие блики света
+  ctx.save(); ctx.globalCompositeOperation = 'screen'; const g = ctx.createLinearGradient(W, 0, 0, H); g.addColorStop(0, 'rgba(255,250,230,.35)'); g.addColorStop(.5, 'rgba(255,250,230,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+  // трещина по «стеклу»: на «трещины» и сильнее на «кроме одной»
+  const k = lerp(eo(P(t, T.crack, T.crack + .35)) * .55, 1, eo(P(t, T.except, T.except + .4)));
+  glassCrack(k, W * .6, H * .45);
+  if (t > T.except) { const f = Math.exp(-(t - T.except) * 6) * .5; ctx.fillStyle = `rgba(255,255,255,${f})`; ctx.fillRect(0, 0, W, H); }
+}
+const RB2 = { x: 540, y: 1560, s: 1.2 };
+function shot2(t) { // робот на линии утилизации
+  const crackW = r2w(RB2, R_CRACK), faceW = r2w(RB2, [360, 380]);
+  const c = camAt([[T.robot, crackW[0], crackW[1], 3.4, .04], [T.b7 + .2, 540, 1080, 1.0, 0], [T.cracked + .3, faceW[0], faceW[1] + 60, 1.35, -.012],
+    [T.sys + .1, 540, 1060, 1.05, 0], [T.util, 540, 1120, 1.12, .02], [T.but, 540, 1100, 1.2, -.01]], t);
+  const alarm = eo(P(t, T.sys, T.sys + .4));
+  corridor(c, t, alarm);
+  layer(c, 1, () => {
+    podium(90, 990, RB2.y, alarm);
+    let expr = 'orig', blink = 0;
+    const bt = T.b7 + .35; if (t > bt && t < bt + .16) blink = Math.sin(P(t, bt, bt + .16) * Math.PI);
+    if (t > T.verdict) expr = 'scared';
+    const sp = Math.max(win(t, T.cracked - .1, T.cracked + .7, .05, .3), t < T.b7 ? .7 : 0);
+    robot(RB2, t, expr, blink, { spark: sp, tremble: t > T.verdict });
+    scanBeam(P(t, T.sys + .35, T.sys + 1.35), '#ff3344', 500, RB2.y);
+  });
+  if (alarm > 0) { // красный свет тревоги
+    ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(255,${200 - 60 * (.5 + .5 * Math.sin(t * 9))},${200 - 60 * (.5 + .5 * Math.sin(t * 9))},${alarm * .8})`; ctx.fillRect(0, 0, W, H); ctx.restore();
+  }
+  hud(['СИСТЕМА · ОБЪЕКТ B-7', 'ОБНАРУЖЕН ДЕФЕКТ'], '#ff5566', win(t, T.sys + .2, T.but, .25, .2));
+  const sk = P(t, T.util, T.util + .22); // штамп
+  if (sk > 0) { ctx.save(); ctx.translate(W / 2, H * .6); ctx.rotate(-.12); const s = lerp(2.4, 1, eo(sk)); ctx.scale(s, s); ctx.globalAlpha = clamp(sk * 3) * (1 - P(t, T.but - .25, T.but));
+    ctx.strokeStyle = '#ff2a3a'; ctx.lineWidth = 12; ctx.beginPath(); ctx.roundRect(-380, -80, 760, 160, 18); ctx.stroke();
+    ctx.fillStyle = '#ff2a3a'; ctx.font = '900 104px Inter'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('УТИЛИЗАЦИЯ', 0, 6); ctx.restore(); }
+}
+function shot3(t) { // Мия: исходный кадр, наезд на нить
+  const im = IMG.plate, gr = IMG.platered; if (!im) return;
+  const S = 1.42, ox = (W - im.width * S) / 2, oy = (H - im.height * S) / 2, w = p => [ox + p[0] * S, oy + p[1] * S];
+  const face = w([465, 380]), wrist = w([300, 880]), mid = w([400, 620]);
+  const c = camAt([[T.but, W / 2, H / 2, 1.0, 0], [T.mia + .4, face[0], face[1] + 250, 1.12, -.01], [T.red + .5, wrist[0], wrist[1] + 20, 2.3, .015],
+    [T.city - .2, wrist[0] + 20, wrist[1] - 10, 2.5, .02], [T.she, mid[0], mid[1], 1.25, 0]], t);
+  layer(c, 1, () => {
+    ctx.drawImage(im, ox, oy, im.width * S, im.height * S);
+    const d = win(t, T.red - .1, T.she, .5, .6);
+    if (d > 0) { ctx.globalAlpha = d; ctx.drawImage(gr, ox, oy, im.width * S, im.height * S); ctx.globalAlpha = 1; }
+    if (d > 0) { const [x, y] = w([300, 905]); ctx.save(); ctx.globalCompositeOperation = 'screen'; const g = ctx.createRadialGradient(x, y, 0, x, y, 120);
+      g.addColorStop(0, `rgba(255,40,60,${.35 * d * (.8 + .2 * Math.sin(t * 4))})`); g.addColorStop(1, 'rgba(255,40,60,0)'); ctx.fillStyle = g; ctx.fillRect(x - 120, y - 120, 240, 240); ctx.restore(); }
+  });
+  layer(c, 1.4, () => { ctx.fillStyle = 'rgba(255,255,255,.55)'; for (let i = 0; i < 26; i++) { const x = hash(i) * W * 1.4 - W * .2, y = (hash(i + 50) * H * 1.4 + t * 18 * (1 + hash(i + 9))) % (H * 1.4) - H * .2; ctx.beginPath(); ctx.arc(x, y, 2 + 3 * hash(i + 3), 0, 7); ctx.fill(); } });
+  // смена света после тревоги: белая волна
+  const wv = P(t, T.but, T.but + .5); if (wv < 1) { ctx.fillStyle = `rgba(255,255,255,${(1 - wv) * .8})`; ctx.fillRect(0, 0, W, H); }
+  // имя
+  const nk = win(t, T.mia, T.red - .1, .35, .3);
+  if (nk > 0) { ctx.save(); ctx.globalAlpha = nk; ctx.fillStyle = '#ffffff'; ctx.shadowColor = 'rgba(0,10,30,.6)'; ctx.shadowBlur = 24; ctx.textAlign = 'left'; ctx.font = '300 110px Inter'; const x = 90 + (1 - eo(nk)) * -40;
+    ctx.fillText('М И Я', x, 1180); ctx.shadowBlur = 0; ctx.fillStyle = '#c8101c'; ctx.fillRect(x, 1215, 260 * eo(nk), 6); ctx.restore(); }
+}
+// общий план: подиум/парапет, робот стоит на нём, Мия за ним
+const RB4 = { x: 300, y: 1450, s: .75 }, GB4 = { x: 720, y: 1963, s: 1.2 };
+function pairScene(c, t, mode) {
+  const gw = g2w(GB4, G_WRIST), rw = r2w(RB4, R_WRIST);
+  layer(c, 1, () => {
+    girl(GB4, t, { tint: mode === 'dusk' ? 'rgba(255,170,110,.18)' : null });
+    podium(-600, 1700, RB4.y, 0, mode === 'dusk' ? 'terrace' : 'lab');
+    const tk = mode === 'dusk' ? 1 : eo(P(t, T.tied, T.hand + .35));
+    const happy = t > T.not, surprised = t > T.tied + .25 && t < T.hand + .25, scanning = t > T.sys2 && t < T.not;
+    let expr = happy ? 'happy' : (surprised || scanning ? 'wide' : 'orig');
+    let blink = 0; const bt = T.hand + .3; if (t > bt && t < bt + .18) blink = Math.sin(P(t, bt, bt + .18) * Math.PI);
+    if (!happy && !surprised && !scanning && t < T.tied) expr = 'orig';
+    if (t > T.hand + .5 && t < T.sys2) expr = 'happy';
+    const hp = P(t, T.not + .1, T.not + .7), hop = -Math.sin(hp * Math.PI) * 50, sq = hp > 0 && hp < 1 ? (hp < .15 ? 1 - hp / .15 : (hp > .85 ? (hp - .85) / .15 : 0)) : 0;
+    robot(RB4, t, expr, blink, { thread: tk > .95 ? 1 : 0, hop: mode === 'dusk' ? 0 : hop, squash: sq, tint: mode === 'dusk' ? 'rgba(255,170,110,.16)' : null });
+    thread(gw, [rw[0] + 6, rw[1] + hop + 4], t, tk, mode === 'dusk' ? .8 : (t > T.not ? .7 : .2));
+  });
+}
+function shot4(t) {
+  const rf = r2w(RB4, [360, 380]);
+  const c = camAt([[T.she, 560, 1100, 1.0, 0], [T.tied + .2, 480, 1250, 1.25, -.01], [T.hand + .4, 470, 1220, 1.15, 0], [T.sys2 + .2, 540, 1080, 1.0, 0],
+    [T.not, rf[0] + 60, rf[1] + 120, 1.45, .012], [T.because, rf[0] + 80, rf[1] + 100, 1.5, 0]], t);
+  corridor(c, t, 0);
+  pairScene(c, t, 'lab');
+  layer(c, 1, () => scanBeam(P(t, T.sys2 + .3, T.not - .1), '#33e0ff', 300, 1500));
+  const scanning = t < T.not - .05;
+  hud(scanning ? ['СИСТЕМА · ОБЪЕКТ B-7', 'ПОВТОРНОЕ СКАНИРОВАНИЕ…'] : ['СИСТЕМА · ОБЪЕКТ B-7', 'ДЕФЕКТ НЕ НАЙДЕН ✓'], scanning ? '#7fe9ff' : '#5dffb0', win(t, T.sys2 + .1, T.because, .25, .3));
+  const sw = P(t, T.she, T.she + .3); if (sw < 1) { ctx.fillStyle = `rgba(255,255,255,${(1 - sw) * .7})`; ctx.fillRect(0, 0, W, H); }
+}
+function shot5(t) { // закат над утопией, отъезд
+  const c = camAt([[T.because, 520, 1250, 1.45, 0], [T.own, 530, 1050, .78, 0], [TOTAL, 530, 1040, .75, 0]], t);
+  cityLayers(c, t, PAL.dusk, .6 * P(t, T.because, T.own), .5);
+  pairScene(c, t, 'dusk');
+  ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = 'rgba(255,170,110,.35)'; ctx.fillRect(0, 0, W, H); ctx.restore();
+  const tk = P(t, T.title, T.title + .8);
+  if (tk > 0) { ctx.save(); ctx.globalAlpha = tk; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '200 150px Inter'; ctx.fillStyle = '#ffffff'; ctx.shadowColor = 'rgba(255,120,90,.8)'; ctx.shadowBlur = 40;
+    const sp = lerp(60, 26, eo(tk)); let s = 'ТРЕЩИНА', x = W / 2 - (s.length - 1) * (80 + sp) / 2;
+    for (const ch of s) { ctx.fillText(ch, x, 380); x += 80 + sp; }
+    ctx.shadowBlur = 0; ctx.fillStyle = '#c8101c'; ctx.fillRect(W / 2 - 160 * eo(tk), 470, 320 * eo(tk), 6); ctx.restore(); }
+  const f = P(t, T.because, T.because + .5); if (f < 1) { ctx.fillStyle = `rgba(255,236,214,${(1 - f) * .9})`; ctx.fillRect(0, 0, W, H); }
+}
+function scene(t) {
+  if (t < T.robot) shot1(t); else if (t < T.but) shot2(t); else if (t < T.she) shot3(t); else if (t < T.because) shot4(t); else shot5(t);
+  // киношная виньетка + зерно
+  const v = ctx.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, H * .78); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(10,20,40,.35)'); ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+}
+const SFX = [];
+const MUSIC = 'utopia';
+function buildSFX() {
+  const a = (t, n, v = 1) => SFX.push([+t.toFixed(3), n, v]);
+  a(.2, 'gust', .4); a(T.crack, 'shatter', .5); a(T.except, 'shatter', .8); a(T.except + .05, 'spark', .7);
+  a(T.robot - .15, 'whoosh', .6); a(T.cracked, 'spark', 1); a(T.sys, 'alarm', .7); a(T.sys + .35, 'scan', .8); a(T.util, 'thud', 1); a(T.util + .05, 'alarm', .5);
+  a(T.but - .05, 'whoosh', .5); a(T.mia, 'twinkle', .35); a(T.red, 'ding', .35);
+  a(T.she - .1, 'swish', .6); a(T.tied + .1, 'tie', .8); a(T.hand, 'tie', .8); a(T.hand + .3, 'boop', .5);
+  a(T.sys2 + .3, 'scan', .8); a(T.not, 'chime', .8); a(T.not + .15, 'boop', .6); a(T.not + .7, 'bounce', .6);
+  a(T.because - .1, 'whoosh', .5); a(T.title, 'twinkle', .5);
+}
+buildSFX();
+// ==============================================================
+
+function draw(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  scene(t);
+  captions(t);
+  const fade = Math.max(1 - P(t, 0, .4), P(t, TOTAL - .5, TOTAL)); if (fade > 0) { ctx.fillStyle = `rgba(0,0,0,${fade})`; ctx.fillRect(0, 0, W, H); }
+}
+const MB = 3, SHUTTER = .5 / 30, acc = document.createElement('canvas'); acc.width = W; acc.height = H; const actx = acc.getContext('2d');
+window.frameJPEG = t => {
+  if (MB < 2) { draw(t); return cv.toDataURL('image/jpeg', .92); }
+  for (let i = 0; i < MB; i++) { draw(t + (i / (MB - 1) - .5) * SHUTTER); actx.globalAlpha = 1 / (i + 1); actx.drawImage(cv, 0, 0); }
+  actx.globalAlpha = 1; return acc.toDataURL('image/jpeg', .92);
+};
+window.META = { TOTAL, SFX, MUSIC, VO, W, H };
+window.READY = Promise.all([document.fonts.load('900 70px Inter'), document.fonts.load('200 70px Inter'), document.fonts.load('300 70px Inter'), document.fonts.load('700 30px Inter'), loadImgs]);
+if (!location.search.includes('render')) { const s = performance.now(); const loop = n => { draw(((n - s) / 1000) % TOTAL); requestAnimationFrame(loop); }; window.READY.then(() => requestAnimationFrame(loop)); }
+</script></body></html>

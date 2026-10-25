@@ -104,6 +104,19 @@ def fx(n):
     if n == 'gasp':
         t = T(.35); return lowpass(noise(.35), 2200) * np.sin(np.pi * t / .35) ** 2 * .9
     if n == 'drum': return mixp(sweep(110, 55, .3) * env(.3, .002, .09) * 1.2, lowpass(noise(.05), 1500) * env(.05, .001, .01))
+    if n == 'alarm':  # two-tone system alarm
+        x = np.concatenate([np.sign(np.sin(2 * np.pi * f * T(.18))) * .22 * env(.18, .005, .3) for f in (880, 660, 880, 660)])
+        return lowpass(x, 3000)
+    if n == 'scan':  # electric hum sweeping up
+        d = 1.1; t = T(d); return (sweep(220, 660, d) * .25 + lowpass(noise(d), 1800) * .3) * np.sin(np.pi * t / d) ** 2 * (1 + .3 * np.sin(2 * np.pi * 30 * t))
+    if n == 'spark':
+        x = np.zeros(int(.5 * SR))
+        for i in range(9):
+            p = (lowpass(noise(.02), 7000) - lowpass(noise(.02), 1500)) * env(.02, .0005, .004) * 1.4; o = int(rng.random() * .45 * SR); x[o:o + len(p)] += p
+        return x
+    if n == 'chime':  # soft "all good" chord
+        return sum(pluck(f, 2.2, .7) for f in (1046.5, 1318.5, 1568.0)) * .35
+    if n == 'tie': return mixp(lowpass(noise(.25), 3000) * np.sin(np.pi * T(.25) / .25) * .5, sweep(600, 900, .1) * env(.1, .002, .04) * .3)
     raise ValueError(n)
 
 
@@ -185,7 +198,25 @@ def music_rome():  # lyre arpeggios + frame drum
     return out
 
 
-mus = {'uke': music_uke, 'city': music_city, 'paris': music_paris, 'rome': music_rome}[meta.get('MUSIC', 'uke')]()
+def music_utopia():  # airy pads + bell arpeggio, Cmaj7 - Am7 - Fmaj7 - Gsus
+    out = np.zeros(N)
+    chords = [[130.8, 196.0, 246.9, 329.6], [110.0, 164.8, 196.0, 261.6], [87.3, 174.6, 220.0, 329.6], [98.0, 146.8, 196.0, 261.6]]
+    seg = 3.2; pad = np.zeros(N)
+    for ci in range(int(TOTAL / seg) + 2):
+        ch = chords[ci % 4]; o = int(ci * seg * SR); d = seg + 1.4; t = T(d)
+        a = np.minimum(1, t / 1.2) * np.minimum(1, (d - t) / 1.4)
+        x = sum(np.sin(2 * np.pi * f * dt * t) + .3 * np.sin(4 * np.pi * f * dt * t) for f in ch for dt in (.998, 1.002)) * a
+        x = x[:max(0, N - o)]; pad[o:o + len(x)] += x
+    out += pad * .022
+    t = 1.0; i = 0
+    while t < TOTAL - 1:
+        ch = chords[int(t / seg) % 4]; f = ch[[1, 2, 3, 2][i % 4]] * 4
+        p = pluck(f, 1.6, 1.0) * .03; o = int(t * SR); out[o:o + len(p)] += p[:N - o]
+        t += .4; i += 1
+    return out
+
+
+mus = {'uke': music_uke, 'city': music_city, 'paris': music_paris, 'rome': music_rome, 'utopia': music_utopia}[meta.get('MUSIC', 'uke')]()
 # голос за кадром (voice_<name>.wav) + приглушение музыки под голосом
 vo = np.zeros(N)
 try:
